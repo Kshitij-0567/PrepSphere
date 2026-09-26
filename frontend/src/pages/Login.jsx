@@ -20,7 +20,7 @@ const Login = () => {
 
     const completeSignIn = (data) => {
         saveSession(data);
-        navigate('/dashboard');
+        navigate('/profile');
     };
 
     const handleLogin = async (e) => {

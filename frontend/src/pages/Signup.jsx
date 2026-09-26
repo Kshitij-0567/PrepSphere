@@ -22,7 +22,7 @@ const Signup = () => {
 
     const completeSignIn = (data) => {
         saveSession(data);
-        navigate('/dashboard');
+        navigate('/profile');
     };
 
     const handleSignup = async (e) => {

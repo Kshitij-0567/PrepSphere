@@ -15,6 +15,10 @@ class User(Base):
     name = Column(String, nullable=True)
     email = Column(String, unique=True, index=True)
     password_hash = Column(String, nullable=True) # NULL for Google / demo accounts that have no password
+    linkedin_handle = Column(String, nullable=True) # the part after linkedin.com/in/
+    github_username = Column(String, nullable=True)
+    github_data = Column(JSON, nullable=True) # last public-profile import (repos, languages, skills)
+    github_synced_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utcnow)
 
     resumes = relationship("Resume", back_populates="user", cascade="all, delete-orphan")

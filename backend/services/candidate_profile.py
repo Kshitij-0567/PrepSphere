@@ -75,9 +75,9 @@ def _get_or_create_skill(db: Session, name: str) -> models.Skill:
     return skill
 
 
-def _replace_resume_skills(db: Session, user: models.User, skill_names: List[str]) -> None:
+def _replace_skills(db: Session, user: models.User, skill_names: List[str], source: str, confidence: float) -> None:
     db.query(models.CandidateSkill).filter(
-        models.CandidateSkill.user_id == user.id, models.CandidateSkill.source == "resume"
+        models.CandidateSkill.user_id == user.id, models.CandidateSkill.source == source
     ).delete(synchronize_session=False)
 
     seen = set()
@@ -87,7 +87,25 @@ def _replace_resume_skills(db: Session, user: models.User, skill_names: List[str
             continue
         seen.add(name.lower())
         skill = _get_or_create_skill(db, name)
-        db.add(models.CandidateSkill(user_id=user.id, skill_id=skill.id, confidence=0.95, source="resume"))
+        db.add(models.CandidateSkill(user_id=user.id, skill_id=skill.id, confidence=confidence, source=source))
+
+
+def _replace_resume_skills(db: Session, user: models.User, skill_names: List[str]) -> None:
+    _replace_skills(db, user, skill_names, source="resume", confidence=0.95)
+
+
+def replace_github_skills(db: Session, user: models.User, skill_names: List[str]) -> None:
+    """Skills demonstrated in public GitHub repositories. Does not commit."""
+    _replace_skills(db, user, skill_names, source="github", confidence=0.7)
+
+
+def github_skill_names(db: Session, user: models.User) -> List[str]:
+    rows = (
+        db.query(models.CandidateSkill)
+        .filter(models.CandidateSkill.user_id == user.id, models.CandidateSkill.source == "github")
+        .all()
+    )
+    return [r.skill.canonical_name for r in rows if r.skill]
 
 
 def activate_resume(db: Session, user: models.User, resume: models.Resume) -> None:

@@ -18,7 +18,9 @@ const ResultsStep = ({ results, selectedRole, seniorityLevel, selectedCompany, o
                 <h2>Interview Evaluation Complete</h2>
                 <p>
                     Target Role: <strong>{results.role_name || selectedRole?.name} ({results.seniority || seniorityLevel} Level)</strong>
-                    {selectedCompany && <span> • Target Company: <strong style={{ color: '#10b981', display: 'inline-flex', alignItems: 'center' }}><CompanyLogo company={selectedCompany} size={18} className="company-inline-logo" /> {selectedCompany.name}</strong></span>}
+                    {selectedCompany
+                        ? <span> • Target Company: <strong style={{ color: '#10b981', display: 'inline-flex', alignItems: 'center' }}><CompanyLogo company={selectedCompany} size={18} className="company-inline-logo" /> {selectedCompany.name}</strong></span>
+                        : results.company_name && <span> • Target Company: <strong style={{ color: '#10b981' }}>{results.company_name}</strong></span>}
                 </p>
 
                 <div className="final-score-display">

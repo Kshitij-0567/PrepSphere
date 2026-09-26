@@ -64,6 +64,8 @@ class Settings:
         self.secret_key: str | None = os.getenv("SECRET_KEY") or None
         self.access_token_expire_minutes: int = _env_int("ACCESS_TOKEN_EXPIRE_MINUTES", 60 * 24)
         self.google_client_id: str | None = os.getenv("GOOGLE_CLIENT_ID") or None
+        # Optional: raises GitHub's API limit from 60 to 5,000 requests per hour.
+        self.github_token: str | None = os.getenv("GITHUB_TOKEN") or None
 
         self.gemini_api_key: str | None = os.getenv("GEMINI_API_KEY") or None
         self.gemini_model: str = os.getenv("GEMINI_MODEL") or "gemini-3.6-flash"

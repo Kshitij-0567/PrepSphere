@@ -41,6 +41,21 @@ class UserLogin(BaseModel):
 class GoogleLoginRequest(BaseModel):
     token: str
 
+class UserUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Name cannot be empty")
+        return value.strip()
+
+class ProfileLinksUpdate(BaseModel):
+    """Only the fields that are sent change; an empty string or null removes a link."""
+    linkedin: Optional[str] = Field(default=None, max_length=300)
+    github: Optional[str] = Field(default=None, max_length=300)
+
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -52,6 +67,7 @@ class UserStats(BaseModel):
     total_interviews: int = 0
     avg_score: float = 0.0
     completed_interviews: int = 0
+    in_progress_interviews: int = 0
 
 class UserProfile(BaseModel):
     model_config = ConfigDict(from_attributes=True)

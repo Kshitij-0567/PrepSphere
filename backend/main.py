@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -18,8 +19,12 @@ from auth import auth_utils
 from core import database, models, schemas, seed_data
 from core.config import QUESTIONS_PER_INTERVIEW, settings
 from core.migrations import run_migrations
-from services.candidate_profile import activate_resume, candidate_skill_names, clear_resume_skills, get_active_resume
+from services import github_service
+from services.candidate_profile import (
+    activate_resume, candidate_skill_names, clear_resume_skills, get_active_resume, replace_github_skills,
+)
 from services.gemini_service import gemini_service
+from services.profile_summary import build_profile_summary
 from services.jd_intelligence import jd_intelligence_service
 from services.resume_intelligence import resume_intelligence_service
 from services.skill_gap import HIGH_IMPORTANCE, compute_skill_gap, merge_jd_requirements, unmet_requirements
@@ -27,8 +32,11 @@ from services.skill_gap import HIGH_IMPORTANCE, compute_skill_gap, merge_jd_requ
 logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("prepsphere")
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 ALLOWED_RESUME_EXTENSIONS = (".pdf", ".docx", ".txt")
+LINKEDIN_URL = re.compile(r"^(?:https?://)?(?:[a-z]{2,3}\.)?linkedin\.com/in/([A-Za-z0-9_%-]{3,100})/?(?:\?.*)?$", re.IGNORECASE)
+LINKEDIN_HANDLE = re.compile(r"^[A-Za-z0-9_-]{3,100}$")
+GITHUB_ERROR_STATUS = {"not_found": 404, "rate_limited": 429, "unavailable": 502}
 
 if not settings.secret_key:
     raise RuntimeError(
@@ -160,6 +168,19 @@ def _generation_context(db: Session, interview: models.Interview, user: models.U
     }
 
 
+def _previous_context(answers: List[models.Answer]) -> List[Dict[str, Any]]:
+    """Earlier questions and answers, so the next question builds on the conversation."""
+    return [
+        {
+            "question": a.question.question_text,
+            "answer_summary": (a.answer_text or "")[:250],
+            "missing": (a.rubric_json or {}).get("missing_concepts", []),
+        }
+        for a in answers
+        if a.question
+    ]
+
+
 def _profile_response(resume: models.Resume, profile: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "resume_id": resume.id,
@@ -256,6 +277,17 @@ async def demo_login(db: Session = Depends(database.get_db)):
 async def get_me(current_user: models.User = Depends(auth_utils.get_current_user)):
     return current_user
 
+@app.patch("/users/me", response_model=schemas.UserProfile)
+async def update_me(
+    data: schemas.UserUpdate,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    current_user.name = data.name
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
 @app.get("/users/stats", response_model=schemas.UserStats)
 async def get_user_stats(
     db: Session = Depends(database.get_db),
@@ -265,7 +297,110 @@ async def get_user_stats(
     completed = [i for i in interviews if i.status == "completed"]
     scores = [i.overall_score for i in completed if i.overall_score is not None]
     avg_score = round(sum(scores) / len(scores), 1) if scores else 0.0
-    return schemas.UserStats(total_interviews=len(interviews), completed_interviews=len(completed), avg_score=avg_score)
+    return schemas.UserStats(
+        total_interviews=len(interviews),
+        completed_interviews=len(completed),
+        in_progress_interviews=len(interviews) - len(completed),
+        avg_score=avg_score,
+    )
+
+# --- PROFILE PAGE ---
+
+def _links_payload(user: models.User) -> Dict[str, Any]:
+    return {
+        "linkedin": user.linkedin_handle,
+        "linkedin_url": f"https://www.linkedin.com/in/{user.linkedin_handle}" if user.linkedin_handle else None,
+        "github": user.github_username,
+        "github_url": f"https://github.com/{user.github_username}" if user.github_username else None,
+    }
+
+
+def _parse_linkedin(value: str) -> Optional[str]:
+    text = value.strip()
+    match = LINKEDIN_URL.match(text)
+    if match:
+        return match.group(1)
+    return text if LINKEDIN_HANDLE.match(text) else None
+
+
+def _clear_github(db: Session, user: models.User) -> None:
+    user.github_username = None
+    user.github_data = None
+    user.github_synced_at = None
+    replace_github_skills(db, user, [])
+
+
+def _store_github(db: Session, user: models.User, data: Dict[str, Any], username: str) -> None:
+    user.github_username = data.get("username") or username
+    user.github_data = data
+    user.github_synced_at = models.utcnow()
+    replace_github_skills(db, user, [s["name"] for s in data.get("skills", [])])
+
+
+@app.get("/profile/summary")
+async def get_profile_summary(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    return build_profile_summary(db, current_user)
+
+@app.put("/profile/links")
+async def update_profile_links(
+    data: schemas.ProfileLinksUpdate,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """Saves LinkedIn/GitHub links. A new GitHub username is imported straight away."""
+    warning = None
+    if "linkedin" in data.model_fields_set:
+        if not (data.linkedin or "").strip():
+            current_user.linkedin_handle = None
+        else:
+            handle = _parse_linkedin(data.linkedin)
+            if not handle:
+                raise HTTPException(status_code=400, detail="Enter a LinkedIn profile URL, for example linkedin.com/in/your-name.")
+            current_user.linkedin_handle = handle
+
+    if "github" in data.model_fields_set:
+        if not (data.github or "").strip():
+            _clear_github(db, current_user)
+        else:
+            username = github_service.parse_username(data.github)
+            if not username:
+                raise HTTPException(status_code=400, detail="Enter a GitHub username or profile URL, for example github.com/your-name.")
+            changed = username.lower() != (current_user.github_username or "").lower()
+            if changed or not current_user.github_data:
+                try:
+                    github_data = await github_service.fetch_github_profile(username)
+                except github_service.GitHubError as exc:
+                    if exc.code == "not_found":
+                        raise HTTPException(status_code=400, detail=exc.message)
+                    # Keep the link; the import can be retried with "Sync" later.
+                    warning = f"Saved your GitHub link, but the import did not finish. {exc.message}"
+                    if changed:
+                        _clear_github(db, current_user)
+                    current_user.github_username = username
+                else:
+                    _store_github(db, current_user, github_data, username)
+
+    db.commit()
+    db.refresh(current_user)
+    return {"links": _links_payload(current_user), "github": current_user.github_data, "warning": warning}
+
+@app.post("/profile/github/sync")
+async def sync_github(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    if not current_user.github_username:
+        raise HTTPException(status_code=400, detail="Add your GitHub profile first.")
+    try:
+        github_data = await github_service.fetch_github_profile(current_user.github_username)
+    except github_service.GitHubError as exc:
+        raise HTTPException(status_code=GITHUB_ERROR_STATUS.get(exc.code, 502), detail=exc.message)
+    _store_github(db, current_user, github_data, current_user.github_username)
+    db.commit()
+    return {"links": _links_payload(current_user), "github": current_user.github_data}
 
 # --- TARGET ROLES ENDPOINTS (SRS FR-03 & Section 11) ---
 
@@ -545,20 +680,71 @@ async def get_interview_history(
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(auth_utils.get_current_user)
 ):
-    interviews = db.query(models.Interview).filter(models.Interview.user_id == current_user.id).order_by(models.Interview.started_at.desc()).all()
+    interviews = db.query(models.Interview).filter(models.Interview.user_id == current_user.id).order_by(models.Interview.started_at.desc(), models.Interview.id.desc()).all()
     return [
         {
             "id": i.id,
+            "role_id": i.role_id,
             "role_name": i.role.name if i.role else "Target Role",
+            "company_id": i.company_id,
             "company_name": i.company.name if i.company else None,
             "seniority": i.seniority,
             "status": i.status,
             "overall_score": i.overall_score,
+            "questions_answered": len(i.answers),
+            "total_questions": QUESTIONS_PER_INTERVIEW,
+            "scores": [a.score for a in sorted(i.answers, key=lambda a: a.id)],
             "started_at": i.started_at,
             "completed_at": i.completed_at,
         }
         for i in interviews
     ]
+
+@app.post("/interviews/{interview_id}/resume")
+async def resume_interview(
+    interview_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """Everything needed to continue an unfinished interview where the candidate left off.
+    Interviews interrupted before their next question was saved get that question now."""
+    interview = _get_owned_interview(db, interview_id, current_user)
+    if interview.status == "completed":
+        raise HTTPException(status_code=409, detail="This interview is already completed. Open its results instead.")
+    answered_ids = {a.question_id for a in interview.answers}
+    questions = sorted(interview.questions, key=lambda q: q.id)
+    current = next((q for q in questions if q.id not in answered_ids), None)
+    if current is None:
+        answers = sorted(interview.answers, key=lambda a: a.id)
+        q_data = await gemini_service.generate_question(
+            **_generation_context(db, interview, current_user),
+            question_number=len(answers) + 1,
+            previous_qa_context=_previous_context(answers),
+        )
+        current = models.Question(
+            interview_id=interview.id,
+            question_text=q_data["question_text"],
+            difficulty=q_data.get("difficulty", "Medium"),
+            expected_concepts=q_data.get("expected_concepts", []),
+        )
+        db.add(current)
+        db.commit()
+        db.refresh(current)
+        db.refresh(interview)
+    last_answer = max(interview.answers, key=lambda a: a.id) if interview.answers else None
+    return {
+        "id": interview.id,
+        "status": interview.status,
+        "role_id": interview.role_id,
+        "role_name": interview.role.name if interview.role else None,
+        "company_id": interview.company_id,
+        "company_name": interview.company.name if interview.company else None,
+        "seniority": interview.seniority or "Mid",
+        "questions_answered": len(interview.answers),
+        "total_questions": QUESTIONS_PER_INTERVIEW,
+        "current_question": schemas.QuestionResponse.model_validate(current) if current else None,
+        "last_evaluation": last_answer.rubric_json if last_answer else None,
+    }
 
 @app.get("/interviews/{interview_id}/current-question", response_model=schemas.QuestionResponse)
 async def get_current_question(
@@ -652,14 +838,7 @@ async def submit_answer(
         }
 
     # Next question, with the whole conversation so far as context
-    prev_context = []
-    for pa in previous_answers:
-        if pa.question:
-            prev_context.append({
-                "question": pa.question.question_text,
-                "answer_summary": (pa.answer_text or "")[:250],
-                "missing": (pa.rubric_json or {}).get("missing_concepts", []),
-            })
+    prev_context = _previous_context(previous_answers)
     prev_context.append({
         "question": question.question_text,
         "answer_summary": data.answer_text[:250],

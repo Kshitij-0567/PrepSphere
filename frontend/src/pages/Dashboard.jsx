@@ -1,8 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Brain, LogOut } from 'lucide-react';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import api, { apiErrorMessage } from '../api/client';
-import { clearSession } from '../api/session';
 import ParticleCanvas from '../components/ParticleCanvas';
 import Stepper from './dashboard/Stepper';
 import RoleStep from './dashboard/RoleStep';
@@ -17,8 +15,11 @@ const DEFAULT_COMPANY = 'google';
 const MAX_RESUME_MB = 10; // keep in sync with MAX_RESUME_MB on the backend
 
 const Dashboard = () => {
-    const navigate = useNavigate();
-    const [user, setUser] = useState(null);
+    const location = useLocation();
+    const [searchParams, setSearchParams] = useSearchParams();
+    // Other pages can preselect a role or company: navigate('/dashboard', { state: { roleId, companyId } })
+    const preselect = useRef(location.state || {});
+    const resumedId = useRef(null);
     const [error, setError] = useState('');
 
     // Workflow Steps: 'role', 'company', 'resume', 'skill-gap', 'interview', 'results'
@@ -66,15 +67,16 @@ const Dashboard = () => {
             if (!cancelled) setError(apiErrorMessage(err, fallback));
         };
 
-        api.get('/users/me')
-            .then(res => { if (!cancelled) setUser(res.data); })
-            .catch(() => { /* an expired session is handled by the API client */ });
-
         api.get('/roles')
             .then(res => {
                 if (cancelled) return;
                 setRoles(res.data);
-                setSelectedRole(prev => prev ?? res.data[0] ?? null);
+                const wanted = res.data.find(r => r.id === preselect.current.roleId);
+                setSelectedRole(prev => {
+                    // A resumed interview sets a placeholder role; swap in the full role once loaded.
+                    if (prev && prev.placeholder) return res.data.find(r => r.id === prev.id) || prev;
+                    return wanted || prev || res.data[0] || null;
+                });
             })
             .catch(report('Could not load the role catalog.'));
 
@@ -82,7 +84,13 @@ const Dashboard = () => {
             .then(res => {
                 if (cancelled) return;
                 setCompanies(res.data);
-                if (!companyChosen.current) {
+                const wanted = res.data.find(c => c.id === preselect.current.companyId);
+                if (wanted) {
+                    companyChosen.current = true;
+                    setSelectedCompany(wanted);
+                } else if (companyChosen.current) {
+                    setSelectedCompany(prev => (prev && prev.placeholder ? res.data.find(c => c.id === prev.id) || prev : prev));
+                } else {
                     setSelectedCompany(res.data.find(c => c.name.toLowerCase() === DEFAULT_COMPANY) || null);
                 }
             })
@@ -98,6 +106,36 @@ const Dashboard = () => {
 
         return () => { cancelled = true; };
     }, []);
+
+    // Continue an unfinished interview: /dashboard?resume=<interview id>
+    const resumeParam = searchParams.get('resume');
+    useEffect(() => {
+        if (!resumeParam || resumedId.current === resumeParam) return;
+        resumedId.current = resumeParam; // sent once, even when effects run twice in development
+        api.post(`/interviews/${resumeParam}/resume`)
+            .then(res => {
+                const s = res.data;
+                companyChosen.current = true;
+                setSelectedRole(prev => (prev && prev.id === s.role_id && !prev.placeholder
+                    ? prev
+                    : roles.find(r => r.id === s.role_id) || { id: s.role_id, name: s.role_name, required_skills: [], placeholder: true }));
+                setSelectedCompany(s.company_id
+                    ? companies.find(c => c.id === s.company_id) || { id: s.company_id, name: s.company_name, logo_url: null, placeholder: true }
+                    : null);
+                setSeniorityLevel(s.seniority || 'Mid');
+                setInterviewId(s.id);
+                setCurrentQuestion(s.current_question);
+                setTotalQuestions(s.total_questions || 5);
+                setQuestionNumber(s.questions_answered + 1);
+                setLastEvaluation(s.last_evaluation);
+                setFinalResults(null);
+                setStep('interview');
+            })
+            .catch(err => setError(apiErrorMessage(err, 'Could not resume that interview.')))
+            .finally(() => setSearchParams({}, { replace: true }));
+        // roles/companies are read once to upgrade the placeholders when already loaded.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [resumeParam, setSearchParams]);
 
     const refreshSavedResumes = async () => {
         try {
@@ -263,38 +301,10 @@ const Dashboard = () => {
         setFinalResults(null);
     };
 
-    const handleLogout = () => {
-        clearSession();
-        navigate('/login');
-    };
-
+    // Brand, account and sign-out live in the app sidebar.
     return (
         <div className="dashboard-root">
             <ParticleCanvas />
-            {/* Header Toolbar */}
-            <header className="dash-header">
-                <div
-                    className="dash-logo-btn"
-                    onClick={() => navigate('/')}
-                    title="Go to Homepage"
-                >
-                    <div className="dash-brand-logo">
-                        <Brain size={18} />
-                    </div>
-                    <span className="dash-brand-title">PrepSphere</span>
-                    <span className="dash-brand-tag">Interactive Workspace</span>
-                </div>
-
-                <div className="dash-user-info">
-                    <div className="dash-user-badge">
-                        <span className="user-online-dot"></span>
-                        <span className="dash-user-name">{user?.name || user?.email || 'Candidate'}</span>
-                    </div>
-                    <button onClick={handleLogout} className="dash-logout-btn">
-                        <LogOut size={15} /> Logout
-                    </button>
-                </div>
-            </header>
 
             {/* Main Content Container */}
             <main className="dash-main">
