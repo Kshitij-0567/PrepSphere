@@ -1,42 +1,12 @@
-# Backend Services - AI Integration
+# Backend Services
 
-This directory houses the logic for interacting with external AI providers and automated services.
+| Module | Responsibility |
+| --- | --- |
+| `gemini_service.py` | Async Gemini client (timeouts, JSON responses, fallback model). Generates interview questions, evaluates answers against a rubric, and builds study recommendations. Candidate-written text is wrapped in delimiters the model is told never to obey. Every method has a deterministic fallback labelled `source: "fallback"` / `evaluator: "fallback"`. |
+| `resume_intelligence.py` | PDF/DOCX/TXT text extraction, contact and link detection, structured sections (Gemini or rule-based), completeness score and improvement tips. |
+| `jd_intelligence.py` | Required vs. preferred skills, soft skills, experience and education from a job description. Unstated fields are reported as "Not specified", not guessed. |
+| `skill_taxonomy.py` | Skill catalog and aliases; evidence-based extraction that avoids everyday-word false positives ("CV", "the rest of", "go live"); mapping from broad role requirements such as "Linux Internals & Bash" to concrete resume skills. |
+| `skill_gap.py` | Weighted readiness score and strong / developing / minor gap / missing statuses. |
+| `candidate_profile.py` | Tracks the user's active resume and keeps their resume-derived skills in sync with it. |
 
-## 📂 Core Service: Gemini AI (`gemini_service.py`)
-
-The `GeminiService` class is the "brain" of InterviewAI. It manages all interactions with the Google Gemini API.
-
-### Key Capabilities:
-1. **Resume Analysis**:
-    - Parses PDF content.
-    - Extracts key projects, skills, and experience levels.
-    - Builds a "Candidate Profile" for the AI interviewer.
-
-2. **Adaptive Questioning**:
-    - Tailors questions based on the `role_category` (e.g., Tech, Finance) and `difficulty_level`.
-    - Implements specific personas: **Adinath** (Technical/Logic focus) and **Veda** (HR/Behavioral focus).
-
-3. **Intelligent Evaluation**:
-    - Analyzes candidate responses using the context of the previous question.
-    - Provides a score from 1-10.
-    - Generates constructive, "honest" feedback from a mock recruiter's perspective.
-
-### Security Note
-- Uses the `GEMINI_API_KEY` stored in the root `.env` file.
-- Prompt engineering is used to restrict the AI to professional interview behavior.
-
-## 🏢 Intelligence Services
-
-### 1. `company_intelligence.py`
-The "Quick Lookup" service. It manages the curated **402-company** database. It uses fuzzy matching to find companies regardless of typos or naming variations (e.g., "FB" vs "Facebook").
-
-### 2. `intelligence_service.py` (The LangGraph Brain - v2.3)
-The "Autonomous Discovery" service. Used when a company is not in the curated DB.
-- **Node-Based Architecture**:
-    - **Router**: Detects ambiguity, location, and industry (Geographic Guarding).
-    - **Researcher**: Scrapes DuckDuckGo for live facts. Applies a **Python-Level Domain Blocklist** (14 generic SEO article domains e.g. datacamp, guru99) to purge junk *before* it reaches the AI.
-    - **Auditor**: Filters noise and applies **Dynamic Domain Guarding** (prevents 'Role Forcing').
-    - **Architect**: Generates a structured profile (Llama-3/Gemini).
-    - **Critic**: Reflects and corrects the profile for quality.
-- **Identity Guarding**: Uses a strict **98% fuzzy matching threshold** to prevent name collisions in memory.
-- **Permanent Memory**: Automatically saves approved profiles to `discoveries.json`.
+`intelligence_service.py`, `company_intelligence.py` and `memory_service.py` belong to the legacy InterviewAI prototype. They are not imported by the app and can be deleted.

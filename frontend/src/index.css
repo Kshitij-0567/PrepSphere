@@ -26,10 +26,7 @@ body {
   overflow-x: hidden;
 }
 
-h1,
-h2,
-h3,
-.brand {
+h1, h2, h3, .brand {
   font-family: 'Outfit', sans-serif;
 }
 
@@ -40,9 +37,7 @@ button {
   transition: all 0.2s ease;
 }
 
-input,
-textarea,
-select {
+input, textarea, select {
   font-family: inherit;
   background: var(--bg-secondary);
   border: 1px solid var(--glass-border);
@@ -63,16 +58,6 @@ input:focus {
   border-radius: 16px;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: var(--bg-primary);
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--accent-blue);
-  border-radius: 10px;
-}
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--accent-blue); border-radius: 10px; }

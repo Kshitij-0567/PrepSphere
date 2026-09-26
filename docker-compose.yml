@@ -1,14 +1,22 @@
-version: '3.9'
-
 services:
-  interview-ai:
-    build: .
+  prepsphere:
+    build:
+      context: .
+      args:
+        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
     ports:
       - "8000:8000"
-    volumes:
-      - ./backend/data:/app/data
     env_file:
       - ./backend/.env
-    restart: always
+    environment:
+      # Overrides the local SQLite path from backend/.env with the persistent volume.
+      DATABASE_URL: sqlite:////data/interview_prep.db
+      CORS_ORIGINS: http://localhost:8000
+    volumes:
+      - prepsphere-data:/data
+    restart: unless-stopped
 
-# Use 'docker-compose up --build' to run the entire project
+volumes:
+  prepsphere-data:
+
+# Run with: docker compose up --build   then open http://localhost:8000

@@ -1,850 +1,406 @@
-import React, { useState, useEffect, useRef } from 'react';
-import axios from 'axios';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import '../App.css';
-import '../Meeting.css';
-import '../InterviewerCards.css';
+import { Brain, LogOut } from 'lucide-react';
+import api, { apiErrorMessage } from '../api/client';
+import { clearSession } from '../api/session';
+import ParticleCanvas from '../components/ParticleCanvas';
+import Stepper from './dashboard/Stepper';
+import RoleStep from './dashboard/RoleStep';
+import CompanyStep from './dashboard/CompanyStep';
+import ResumeStep from './dashboard/ResumeStep';
+import SkillGapStep from './dashboard/SkillGapStep';
+import InterviewStep from './dashboard/InterviewStep';
+import ResultsStep from './dashboard/ResultsStep';
+import './Dashboard.css';
 
-const API_BASE = "http://127.0.0.1:8000";
+const DEFAULT_COMPANY = 'google';
+const MAX_RESUME_MB = 10; // keep in sync with MAX_RESUME_MB on the backend
 
-function Dashboard() {
+const Dashboard = () => {
     const navigate = useNavigate();
-    const [step, setStep] = useState('setup'); // setup, meeting, result
+    const [user, setUser] = useState(null);
+    const [error, setError] = useState('');
+
+    // Workflow Steps: 'role', 'company', 'resume', 'skill-gap', 'interview', 'results'
+    const [step, setStep] = useState('role');
+
+    // Role Selection State & Filters
+    const [roles, setRoles] = useState([]);
+    const [selectedRole, setSelectedRole] = useState(null);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [selectedCategory, setSelectedCategory] = useState('All');
+    const [seniorityLevel, setSeniorityLevel] = useState('Mid'); // 'Junior', 'Mid', 'Senior'
+
+    // Optional Job Description
+    const [jdText, setJdText] = useState('');
+    const [jdAnalysis, setJdAnalysis] = useState(null);
+    const [analyzingJd, setAnalyzingJd] = useState(false);
+    const [jdError, setJdError] = useState('');
+
+    // Target Company Selection
+    const [companies, setCompanies] = useState([]);
+    const [selectedCompany, setSelectedCompany] = useState(null);
+    const companyChosen = useRef(false);
+
+    // Resume & Skill Gap State
+    const [savedResumes, setSavedResumes] = useState([]);
+    const [activeResumeId, setActiveResumeId] = useState(null);
+    const [busyResumeId, setBusyResumeId] = useState(null);
+    const [resumeQuality, setResumeQuality] = useState(null);
+    const [skillGapData, setSkillGapData] = useState(null);
     const [loading, setLoading] = useState(false);
-    const [preparingStep, setPreparingStep] = useState(0);
-    const [resumePreview, setResumePreview] = useState(null);
 
+    // Interview Session State
     const [interviewId, setInterviewId] = useState(null);
-    const [messages, setMessages] = useState([]);
-    const [userInput, setUserInput] = useState("");
-    const [sessionData, setSessionData] = useState({
-        role_category: "",
-        sub_role: "",
-        difficulty_level: 1,
-        target_company: "",
-        job_description: "",
-        is_panel: false,
-        interviewer_name: "Adinath"
-    });
-    const [resumeFile, setResumeFile] = useState(null);
-    const [evaluation, setEvaluation] = useState(null);
-    const [isListening, setIsListening] = useState(false);
-    const [isSpeaking, setIsSpeaking] = useState(false);
-    const [isMicOn, setIsMicOn] = useState(true);
-    const [isCamOn, setIsCamOn] = useState(false);
-    const [stream, setStream] = useState(null);
-    const videoRef = useRef(null);
-    const recognitionRef = useRef(null);
-    const isSpeakingRef = useRef(false);
+    const [currentQuestion, setCurrentQuestion] = useState(null);
+    const [questionNumber, setQuestionNumber] = useState(1);
+    const [totalQuestions, setTotalQuestions] = useState(5);
+    const [lastEvaluation, setLastEvaluation] = useState(null);
+    const [finalResults, setFinalResults] = useState(null);
 
-    // Multi-round tracking
-    const [currentRound, setCurrentRound] = useState("Technical");
-    const [currentRoundNumber, setCurrentRoundNumber] = useState(1);
-    const [roundsCompleted, setRoundsCompleted] = useState([]);
-    const [roundScores, setRoundScores] = useState({});
-    const [questionCount, setQuestionCount] = useState(0);
-    const [showTransition, setShowTransition] = useState(false);
-    const [transitionData, setTransitionData] = useState({ prevRound: "", nextRound: "", score: 0 });
-    const [showPricing, setShowPricing] = useState(false);
-    const [stats, setStats] = useState({ total_interviews: 0, avg_score: 0.0 });
-    const [availableVoices, setAvailableVoices] = useState([]);
-    const [companyIntel, setCompanyIntel] = useState(null);
-    const [showBriefing, setShowBriefing] = useState(false);
-    const [masterReport, setMasterReport] = useState(null);
-    const [companySuggestions, setCompanySuggestions] = useState([]);
-    const [filteredSuggestions, setFilteredSuggestions] = useState([]);
-    const [showSuggestions, setShowSuggestions] = useState(false);
-
-
-
-    const user = JSON.parse(localStorage.getItem('user') || '{}');
-    const token = localStorage.getItem('token');
-
+    // Initial data loads once. (Re-running on every step change used to reset the chosen
+    // role to the first role and the chosen company back to the default.)
     useEffect(() => {
-        if (!token) {
-            navigate('/login');
-        } else if (step === 'setup') {
-            // Fetch real user stats
-            const fetchStats = async () => {
-                try {
-                    const res = await axios.get(`${API_BASE}/users/stats`, {
-                        headers: { 'Authorization': `Bearer ${token}` }
-                    });
-                    setStats(res.data);
-                } catch (err) {
-                    console.error("Error fetching stats:", err);
-                }
-            };
-            fetchStats();
-
-            // Fetch company suggestions
-            const fetchSuggestions = async () => {
-                try {
-                    const res = await axios.get(`${API_BASE}/interviews/companies/suggestions`, {
-                        headers: { 'Authorization': `Bearer ${token}` }
-                    });
-                    setCompanySuggestions(res.data);
-                } catch (err) {
-                    console.error("Error fetching suggestions:", err);
-                }
-            };
-            fetchSuggestions();
-        }
-    }, [token, navigate, step]);
-
-    useEffect(() => {
-        const loadVoices = () => {
-            const v = window.speechSynthesis.getVoices();
-            setAvailableVoices(v);
+        let cancelled = false;
+        const report = (fallback) => (err) => {
+            if (!cancelled) setError(apiErrorMessage(err, fallback));
         };
-        loadVoices();
-        window.speechSynthesis.onvoiceschanged = loadVoices;
+
+        api.get('/users/me')
+            .then(res => { if (!cancelled) setUser(res.data); })
+            .catch(() => { /* an expired session is handled by the API client */ });
+
+        api.get('/roles')
+            .then(res => {
+                if (cancelled) return;
+                setRoles(res.data);
+                setSelectedRole(prev => prev ?? res.data[0] ?? null);
+            })
+            .catch(report('Could not load the role catalog.'));
+
+        api.get('/companies')
+            .then(res => {
+                if (cancelled) return;
+                setCompanies(res.data);
+                if (!companyChosen.current) {
+                    setSelectedCompany(res.data.find(c => c.name.toLowerCase() === DEFAULT_COMPANY) || null);
+                }
+            })
+            .catch(report('Could not load companies.'));
+
+        api.get('/resumes')
+            .then(res => {
+                if (cancelled) return;
+                setSavedResumes(res.data);
+                setActiveResumeId(res.data.find(r => r.is_active)?.id ?? null);
+            })
+            .catch(report('Could not load your saved resumes.'));
+
+        return () => { cancelled = true; };
     }, []);
 
-    // Initialize Speech Recognition once
-    useEffect(() => {
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (SpeechRecognition) {
-            const recognition = new SpeechRecognition();
-            recognition.lang = 'en-US';
-            recognition.interimResults = true;
-            recognition.continuous = true;
-
-            recognition.onstart = () => setIsListening(true);
-            recognition.onend = () => {
-                // Only auto-restart if mic is on AND AI is NOT speaking
-                if (step === 'meeting' && isMicOn && !isSpeakingRef.current) {
-                    try { recognition.start(); } catch (e) { }
-                }
-            };
-
-            recognition.onresult = (event) => {
-                if (isSpeakingRef.current) return; // Prevent picking up AI voice
-
-                const transcript = Array.from(event.results)
-                    .map(result => result[0])
-                    .map(result => result.transcript)
-                    .join('');
-                setUserInput(transcript);
-            };
-            recognitionRef.current = recognition;
-        }
-    }, [step, isMicOn]);
-
-    const toggleMic = () => {
-        if (isMicOn) {
-            recognitionRef.current?.stop();
-        } else {
-            recognitionRef.current?.start();
-        }
-        setIsMicOn(!isMicOn);
-    };
-
-    const toggleCam = async () => {
-        if (!isCamOn) {
-            try {
-                const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-                setStream(mediaStream);
-                if (videoRef.current) videoRef.current.srcObject = mediaStream;
-                setIsCamOn(true);
-            } catch (err) {
-                console.error("Camera access denied", err);
-            }
-        } else {
-            if (stream) {
-                stream.getVideoTracks().forEach(track => {
-                    track.stop();
-                });
-                if (videoRef.current) videoRef.current.srcObject = null;
-            }
-            setIsCamOn(false);
-        }
-    };
-
-    const speak = (content) => {
-        if (!content) return;
-        // Strip [Interviewer Name]: prefix so it's not spoken
-        const cleanedText = content.replace(/^\[.*?\]:\s*/, '');
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(cleanedText);
-        utterance.onstart = () => {
-            setIsSpeaking(true);
-            isSpeakingRef.current = true;
-            setUserInput(""); // Hard reset input when AI starts
-            recognitionRef.current?.stop(); // Stop listening
-        };
-        utterance.onend = () => {
-            setIsSpeaking(false);
-            isSpeakingRef.current = false;
-            // Restart listening only after AI is done
-            if (isMicOn && step === 'meeting') {
-                try { recognitionRef.current?.start(); } catch (e) { }
-            }
-        };
-        const interviewerIsVeda = sessionData.interviewer_name === "Veda";
-        let selectedVoice = null;
-
-        if (interviewerIsVeda) {
-            selectedVoice = availableVoices.find(v => {
-                const n = v.name.toLowerCase();
-                return n.includes('female') || n.includes('samantha') || n.includes('zira') || n.includes('vicki') || n.includes('sally') || n.includes('amy') || n.includes('vicky');
-            }) || availableVoices[1];
-        } else {
-            selectedVoice = availableVoices.find(v => {
-                const n = v.name.toLowerCase();
-                return n.includes('male') || n.includes('david') || n.includes('mark') || n.includes('daniel') || n.includes('james') || n.includes('alex');
-            }) || availableVoices[0];
-        }
-
-        // If voices aren't ready yet, try to load them again
-        if (availableVoices.length === 0) {
-            const voices = window.speechSynthesis.getVoices();
-            if (voices.length > 0) setAvailableVoices(voices);
-        }
-
-        utterance.voice = selectedVoice || null;
-        utterance.rate = 1.0;
-        utterance.pitch = interviewerIsVeda ? 1.1 : 0.9;
-        window.speechSynthesis.speak(utterance);
-    };
-
-    useEffect(() => {
-        if (step === 'meeting') {
-            if (isMicOn) recognitionRef.current?.start();
-        }
-        return () => {
-            stream?.getTracks().forEach(t => t.stop());
-            if (resumePreview) URL.revokeObjectURL(resumePreview);
-        };
-    }, [step, stream, resumePreview]);
-
-    useEffect(() => {
-        if (step === 'meeting' && messages.length > 0 && messages[messages.length - 1].role === 'assistant') {
-            speak(messages[messages.length - 1].content);
-        }
-    }, [messages, step]);
-
-
-    const startInterview = async () => {
-        if (!resumeFile) {
-            alert("Please upload your resume (PDF) to start a contextual AI interview. This helps our AI tailor questions specifically to your background!");
-            return;
-        }
-
-        setLoading(true);
-        setStep('preparing');
-        setPreparingStep(1);
-
-        // Step 1: Parsing Resume (if exists) or Just initializing
-        const interval = setInterval(() => {
-            setPreparingStep(prev => prev < 4 ? prev + 1 : prev);
-        }, 2000);
-
+    const refreshSavedResumes = async () => {
         try {
-            let res;
-            if (resumeFile) {
-                const formData = new FormData();
-                formData.append('file', resumeFile);
-                formData.append('role_category', sessionData.role_category);
-                formData.append('sub_role', sessionData.sub_role);
-                formData.append('difficulty_level', sessionData.difficulty_level);
-                formData.append('target_company', sessionData.target_company);
-                formData.append('is_panel', sessionData.is_panel);
-                formData.append('job_description', sessionData.job_description);
-                formData.append('interviewer_name', sessionData.interviewer_name);
-                res = await axios.post(`${API_BASE}/interviews/upload-resume`, formData, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-            } else {
-                res = await axios.post(`${API_BASE}/interviews/start`, {
-                    ...sessionData,
-                    difficulty_level: parseInt(sessionData.difficulty_level)
-                }, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-            }
-            setInterviewId(res.data.id);
-            setMessages([{ role: 'assistant', content: res.data.first_question }]);
-            setQuestionCount(1);
-
-            // NEW: Set Intelligence Data
-            if (res.data.company_intelligence) {
-                setCompanyIntel(res.data.company_intelligence);
-            }
-
-            clearInterval(interval);
-            setPreparingStep(4);
-
-            // Wait a moment for UX before showing briefing
-            setTimeout(() => {
-                if (res.data.company_intelligence) {
-                    setStep('briefing'); // Changed step to hide the 'preparing' view
-                    setShowBriefing(true);
-                } else {
-                    setStep('meeting');
-                }
-                setLoading(false);
-            }, 1500);
+            const res = await api.get('/resumes');
+            setSavedResumes(res.data);
+            setActiveResumeId(res.data.find(r => r.is_active)?.id ?? null);
         } catch (err) {
-            clearInterval(interval);
-            alert(`Error: ${err.message}`);
-            setStep('setup');
-            setLoading(false);
+            console.error("Error refreshing saved resumes:", err);
         }
     };
 
-    const submitAnswer = async () => {
-        const words = userInput.trim().split(/\s+/);
-        if (!userInput.trim() || words.length < 3) {
-            const gentlereminder = "I'm sorry, I didn't catch that. Could you please provide a more detailed answer? I need at least a few words to properly evaluate your technical skills!";
-            setMessages(prev => [...prev, { role: 'assistant', content: gentlereminder }]);
-            setUserInput(""); // Reset for a clean start
-            // FORCE RESTART Recognition to clear internal result buffer
-            if (recognitionRef.current) {
-                recognitionRef.current.stop();
-                setTimeout(() => {
-                    if (isMicOn && !isSpeakingRef.current) {
-                        try { recognitionRef.current.start(); } catch (e) { }
-                    }
-                }, 100);
-            }
-            return;
-        }
-        const currentInput = userInput;
-        setUserInput("");
-        setMessages(prev => [...prev, { role: 'user', content: currentInput }]);
-        setLoading(true);
-        window.speechSynthesis.cancel();
+    // --- Role & job description ---
+    const handleSelectRole = (role) => {
+        if (role.id !== selectedRole?.id) setSkillGapData(null);
+        setSelectedRole(role);
+    };
 
+    const handleJdTextChange = (text) => {
+        setJdText(text);
+        setJdAnalysis(null);   // an edited JD needs re-analysis
+        setJdError('');
+    };
+
+    const handleAnalyzeJd = async () => {
+        setAnalyzingJd(true);
+        setJdError('');
         try {
-            const res = await axios.post(`${API_BASE}/interviews/submit-answer`, {
-                interview_id: interviewId,
-                answer: currentInput
-            }, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-
-            if (res.data.current_round) {
-                setCurrentRound(res.data.current_round);
-                setCurrentRoundNumber(res.data.current_round_number);
-                setQuestionCount(res.data.questions_asked || 0);
-            }
-
-            if (res.data.round_completed) {
-                setRoundsCompleted(res.data.rounds_completed || []);
-                setRoundScores(res.data.round_scores || {});
-                if (res.data.round_passed) {
-                    if (res.data.interview_completed) {
-                        setEvaluation(res.data.evaluation);
-                        setMasterReport(res.data.master_report);
-                        setStep('result');
-                    } else {
-                        const lastRound = res.data.rounds_completed[res.data.rounds_completed.length - 1];
-                        setTransitionData({
-                            prevRound: lastRound,
-                            nextRound: res.data.next_round,
-                            score: res.data.round_scores[lastRound]
-                        });
-                        setShowTransition(true);
-                        setTimeout(() => {
-                            setShowTransition(false);
-                            setCurrentRound(res.data.next_round);
-                            setCurrentRoundNumber(res.data.next_round_number);
-                            setMessages(prev => [...prev, { role: 'assistant', content: res.data.next_question }]);
-                            setQuestionCount(1);
-                        }, 4000);
-                    }
-                } else {
-                    setEvaluation(res.data.evaluation);
-                    setStep('result');
-                }
-            } else {
-                setEvaluation(res.data.evaluation);
-                if (res.data.terminated) {
-                    setStep('result');
-                } else {
-                    setMessages(prev => [...prev, { role: 'assistant', content: res.data.next_question }]);
-                    setQuestionCount(res.data.questions_asked + 1);
-                }
-            }
+            const res = await api.post('/jobs/analyze', { jd_text: jdText, role_title: selectedRole?.name });
+            setJdAnalysis(res.data);
         } catch (err) {
-            alert("Submission failed.");
+            setJdError(apiErrorMessage(err, 'Could not analyze the job description.'));
+        }
+        setAnalyzingJd(false);
+    };
+
+    const handleClearJd = () => {
+        setJdText('');
+        setJdAnalysis(null);
+        setJdError('');
+    };
+
+    const jdRequiredSkills = jdAnalysis ? jdAnalysis.required_skills.map(s => s.name) : [];
+
+    // --- Company ---
+    const handleSelectCompany = (company) => {
+        companyChosen.current = true;
+        setSelectedCompany(company);
+    };
+
+    // --- Resume & skill gap (SRS FR-04 to FR-08) ---
+    const loadSkillGap = async () => {
+        const params = { role_id: selectedRole.id };
+        if (jdRequiredSkills.length) params.jd_skills = jdRequiredSkills.join(',');
+        const res = await api.get('/skill-gaps', { params });
+        setSkillGapData(res.data);
+    };
+
+    const activateResume = async (request, fallbackMessage) => {
+        if (!selectedRole) return;
+        setLoading(true);
+        setError('');
+        try {
+            const res = await request();
+            setActiveResumeId(res.data.resume_id);
+            setResumeQuality(res.data.quality_analysis || null);
+            await loadSkillGap();
+            refreshSavedResumes();
+            setStep('skill-gap');
+        } catch (err) {
+            setError(apiErrorMessage(err, fallbackMessage));
         }
         setLoading(false);
     };
 
-    if (step === 'setup') {
-        const roleCategories = ["Engineering & Tech", "Healthcare & Medical", "Business & Management", "Finance & Accounting", "Creative & Design", "Sales & Marketing", "Education & Training", "Legal", "Construction & Trades", "Hospitality & Tourism", "Social Services", "Science & Research"];
-        const interviewers = [
-            { name: "Adinath", gender: "Male", v: "male", desc: "Senior Mentor. Focuses on your technical fundamentals and core logic." },
-            { name: "Veda", gender: "Female", v: "female", desc: "HR Specialist. Tests your communication skills and behavioral readiness." }
-        ];
+    const handleUpload = (file) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        return activateResume(() => api.post('/resumes/upload', formData), 'Error processing resume.');
+    };
 
-        return (
-            <div className="dashboard-layout">
-                <nav className="top-nav">
-                    <div className="nav-left">
-                        <div className="nav-logo">InterviewAI</div>
-                        <div className="nav-tag">BETA</div>
+    const handleUseSaved = async (resumeId) => {
+        setBusyResumeId(resumeId);
+        await activateResume(() => api.post(`/resumes/${resumeId}/select`), 'Error selecting saved resume.');
+        setBusyResumeId(null);
+    };
+
+    const handleDeleteSaved = async (resume) => {
+        if (!window.confirm(`Delete "${resume.filename}" from your saved resumes?`)) return;
+        try {
+            const res = await api.delete(`/resumes/${resume.id}`);
+            setSavedResumes(prev => prev.filter(r => r.id !== resume.id));
+            if (res.data.was_active) {
+                setActiveResumeId(null);
+                setResumeQuality(null);
+                setSkillGapData(null);
+            }
+        } catch (err) {
+            setError(apiErrorMessage(err, 'Error deleting saved resume.'));
+        }
+    };
+
+    // --- Mock interview (SRS FR-09 to FR-14) ---
+    const startInterview = async () => {
+        if (!selectedRole) return;
+        setLoading(true);
+        setError('');
+        try {
+            const payload = {
+                role_id: selectedRole.id,
+                company_id: selectedCompany ? selectedCompany.id : null,
+                seniority: seniorityLevel,
+            };
+            if (jdAnalysis && jdText.trim()) payload.job_description = jdText;
+            const res = await api.post('/interviews', payload);
+            setInterviewId(res.data.interview_id);
+            setCurrentQuestion(res.data.question);
+            setTotalQuestions(res.data.total_questions || 5);
+            setQuestionNumber(1);
+            setLastEvaluation(null);
+            setFinalResults(null);
+            setStep('interview');
+        } catch (err) {
+            setError(apiErrorMessage(err, 'Failed to start interview.'));
+        }
+        setLoading(false);
+    };
+
+    const handleAnswerSubmit = async (answerText) => {
+        setLoading(true);
+        setError('');
+        try {
+            const res = await api.post(`/interviews/${interviewId}/answers`, {
+                question_id: currentQuestion.id,
+                answer_text: answerText
+            });
+            setLastEvaluation(res.data.evaluation);
+
+            if (res.data.status === 'completed') {
+                const resultRes = await api.get(`/interviews/${interviewId}/results`);
+                setFinalResults(resultRes.data);
+                setStep('results');
+            } else {
+                setCurrentQuestion(res.data.next_question);
+                setQuestionNumber(res.data.questions_answered + 1);
+            }
+        } catch (err) {
+            setError(apiErrorMessage(err, 'Error evaluating answer.'));
+        }
+        setLoading(false);
+    };
+
+    const handleNavigate = (target) => {
+        if (step === 'interview' && !window.confirm('Leave this interview? It will stay unfinished.')) return;
+        setStep(target);
+    };
+
+    const handleRestart = () => {
+        setStep('role');
+        setSkillGapData(null);
+        setInterviewId(null);
+        setCurrentQuestion(null);
+        setLastEvaluation(null);
+        setFinalResults(null);
+    };
+
+    const handleLogout = () => {
+        clearSession();
+        navigate('/login');
+    };
+
+    return (
+        <div className="dashboard-root">
+            <ParticleCanvas />
+            {/* Header Toolbar */}
+            <header className="dash-header">
+                <div
+                    className="dash-logo-btn"
+                    onClick={() => navigate('/')}
+                    title="Go to Homepage"
+                >
+                    <div className="dash-brand-logo">
+                        <Brain size={18} />
                     </div>
-                    <div className="nav-right">
-                        <div className="user-profile-badge" onClick={() => setShowPricing(true)}>
-                            <div className="user-avatar">
-                                {user.full_name ? user.full_name.charAt(0).toUpperCase() : "G"}
-                            </div>
-                            <div className="user-details">
-                                <span className="user-name">{user.full_name || "Guest User"}</span>
-                                <span className="user-status">FREE PLAN</span>
-                            </div>
-                        </div>
+                    <span className="dash-brand-title">PrepSphere</span>
+                    <span className="dash-brand-tag">Interactive Workspace</span>
+                </div>
+
+                <div className="dash-user-info">
+                    <div className="dash-user-badge">
+                        <span className="user-online-dot"></span>
+                        <span className="dash-user-name">{user?.name || user?.email || 'Candidate'}</span>
                     </div>
-                </nav>
+                    <button onClick={handleLogout} className="dash-logout-btn">
+                        <LogOut size={15} /> Logout
+                    </button>
+                </div>
+            </header>
 
-                <main className="dashboard-content">
-                    <header className="dashboard-header">
-                        <div className="welcome-banner">
-                            <h1>Welcome Back, {user.full_name?.split(' ')[0] || "Candidate"}! 👋</h1>
-                            <p>Ready to ace your next big interview? Let's configure your practice session.</p>
-                        </div>
+            {/* Main Content Container */}
+            <main className="dash-main">
+                <Stepper step={step} onNavigate={handleNavigate} />
 
-                        <div className="quick-stats">
-                            <div className="stat-card glass-card">
-                                <span className="stat-label">AVG SCORE</span>
-                                <span className="stat-value">⭐ {stats.avg_score}</span>
-                            </div>
-                            <div className="stat-card glass-card">
-                                <span className="stat-label">INTERVIEWS</span>
-                                <span className="stat-value">📊 {stats.total_interviews}</span>
-                            </div>
-                        </div>
-                    </header>
-
-                    <div className="glass-card setup-box">
-                        <h2>Round Configuration</h2>
-                        <div className="interviewer-selector" style={{ marginBottom: '25px' }}>
-                            <label style={{ marginBottom: '10px', display: 'block' }}>Choose Your Interviewer</label>
-                            <div className="interviewer-grid" style={{ display: 'flex', gap: '15px' }}>
-                                {interviewers.map(int => (
-                                    <div key={int.name} className={`interviewer-card glass-card ${sessionData.interviewer_name === int.name ? 'selected' : ''}`} onClick={() => setSessionData({ ...sessionData, interviewer_name: int.name })} style={{ flex: 1, padding: '15px', cursor: 'pointer', border: sessionData.interviewer_name === int.name ? '2px solid var(--primary)' : '1px solid var(--glass-border)', background: sessionData.interviewer_name === int.name ? 'rgba(99, 102, 241, 0.1)' : 'transparent' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-                                            <span style={{ fontSize: '1.2rem' }}>{int.gender === "Male" ? "👨‍💼" : "👩‍💼"}</span>
-                                            <strong style={{ fontSize: '1.1rem' }}>{int.name}</strong>
-                                        </div>
-                                        <p style={{ fontSize: '0.8rem', opacity: 0.7, margin: 0 }}>{int.desc}</p>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                        <div className="input-row">
-                            <div className="input-group">
-                                <label>Role Category</label>
-                                <select value={sessionData.role_category} onChange={e => setSessionData({ ...sessionData, role_category: e.target.value })}>
-                                    <option value="" disabled>Select Category</option>
-                                    {roleCategories.map(r => <option key={r} value={r}>{r}</option>)}
-                                </select>
-                            </div>
-                            <div className="input-group">
-                                <label>Specific Sub-Role</label>
-                                <input type="text" placeholder="e.g. Senior Backend Dev" value={sessionData.sub_role} onChange={e => setSessionData({ ...sessionData, sub_role: e.target.value })} />
-                            </div>
-                        </div>
-                        <div className="input-row">
-                            <div className="input-group" style={{ position: 'relative' }}>
-                                <label>Target Company</label>
-                                <input 
-                                    type="text" 
-                                    placeholder="e.g. Google" 
-                                    value={sessionData.target_company} 
-                                    onChange={e => {
-                                        const val = e.target.value;
-                                        setSessionData({ ...sessionData, target_company: val });
-                                        if (val.trim().length > 0) {
-                                            const filtered = companySuggestions.filter(c => 
-                                                c.toLowerCase().includes(val.toLowerCase())
-                                            ).slice(0, 5);
-                                            setFilteredSuggestions(filtered);
-                                            setShowSuggestions(filtered.length > 0);
-                                        } else {
-                                            setShowSuggestions(false);
-                                        }
-                                    }}
-                                    onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                                    autoComplete="off"
-                                />
-                                {showSuggestions && (
-                                    <div className="company-suggestions-floating glass-card">
-                                        {filteredSuggestions.map(c => (
-                                            <div 
-                                                key={c} 
-                                                className="suggestion-item"
-                                                onMouseDown={(e) => {
-                                                    // Prevents the onBlur from firing before the state update
-                                                    e.preventDefault(); 
-                                                    setSessionData(prev => ({ ...prev, target_company: c }));
-                                                    setShowSuggestions(false);
-                                                }}
-                                            >
-                                                🏢 {c}
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                            <div className="input-group">
-                                <label>Difficulty</label>
-                                <select value={sessionData.difficulty_level} onChange={e => setSessionData({ ...sessionData, difficulty_level: parseInt(e.target.value) })}>
-                                    <option value={1}>Junior (Level 1)</option>
-                                    <option value={2}>Mid (Level 2)</option>
-                                    <option value={3}>Senior (Level 3)</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div className="checkbox-group" style={{ margin: '10px 0' }}>
-                            <input type="checkbox" id="panel" checked={sessionData.is_panel} onChange={e => setSessionData({ ...sessionData, is_panel: e.target.checked })} />
-                            <label htmlFor="panel">Practice with a Panel (Mock Interview Mode)</label>
-                        </div>
-                        <div className="input-group">
-                            <label>Upload Resume (PDF - Contextual AI Improvement) <span style={{ color: '#ef4444', fontSize: '0.7rem' }}>*REQUIRED</span></label>
-                            <input type="file" accept=".pdf" onChange={e => {
-                                const file = e.target.files[0];
-                                if (file) {
-                                    setResumeFile(file);
-                                    setResumePreview(URL.createObjectURL(file));
-                                }
-                            }} />
-                        </div>
-                        <button className="primary-btn" onClick={startInterview} disabled={loading}>
-                            {loading ? "PREPARING INTERVIEW..." : "START PRACTICE SESSION"}
-                        </button>
-                        <button className="secondary-btn" onClick={() => { localStorage.clear(); window.location.href = '/'; }} style={{ marginTop: '10px', background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.5)', width: '100%', padding: '12px' }}>LOGOUT</button>
-                    </div>
-
-                    <footer className="disclaimer-footer">
-                        <p>
-                            <b>Disclaimer:</b> InterviewAI is an independent simulation platform. The AI personas, scenarios, and company-specific interview mocks are intended for practice purposes only. This platform and its AI interviewers (Adinath, Veda, etc.) are not affiliated with, endorsed by, or associated with any actual company, its employees, or its recruitment teams. Simulations are based on publicly available industry standards and do not guarantee actual interview outcomes.
-                        </p>
-                    </footer>
-                </main>
-
-                {showPricing && (
-                    <div className="modal-overlay" onClick={() => setShowPricing(false)}>
-                        <div className="pricing-modal glass-card" onClick={e => e.stopPropagation()}>
-                            <button className="close-modal" onClick={() => setShowPricing(false)}>&times;</button>
-                            <div className="pricing-header">
-                                <h2>Upgrade Your Preparation</h2>
-                                <p>Unlock premium AI personas, unlimited rounds, and advanced behavioral analytics.</p>
-                            </div>
-                            <div className="pricing-grid">
-                                <div className="pricing-card glass-card">
-                                    <div className="plan-badge">CURRENT</div>
-                                    <h3>Basic</h3>
-                                    <div className="price">₹0<span>/mo</span></div>
-                                    <ul>
-                                        <li>✅ 1 Interview/2 Weeks</li>
-                                        <li>✅ Standard Technical Round</li>
-                                        <li>✅ Basic AI Feedback</li>
-                                        <li>❌ No Resume Analysis</li>
-                                    </ul>
-                                    <button className="plan-btn disabled">YOUR PLAN</button>
-                                </div>
-                                <div className="pricing-card glass-card pro">
-                                    <div className="plan-badge featured">POPULAR</div>
-                                    <h3>Pro</h3>
-                                    <div className="price">₹199<span>/mo</span></div>
-                                    <ul>
-                                        <li>✅ Unlimited Interviews</li>
-                                        <li>✅ All Technical Rounds</li>
-                                        <li>✅ Resume-Tailored Questions</li>
-                                        <li>✅ Star-Method Evaluation</li>
-                                    </ul>
-                                    <button className="plan-btn primary">UPGRADE NOW</button>
-                                </div>
-                                <div className="pricing-card glass-card elite">
-                                    <h3>Elite</h3>
-                                    <div className="price">₹499<span>/mo</span></div>
-                                    <ul>
-                                        <li>✅ Multi-Round Masterclass</li>
-                                        <li>✅ 7-Day Custom Roadmap</li>
-                                        <li>✅ Vibe & Speech Analytics</li>
-                                        <li>✅ Panel Interview Mode</li>
-                                    </ul>
-                                    <button className="plan-btn secondary">GET ELITE</button>
-                                </div>
-                            </div>
-                            <div className="payment-notice">
-                                <p>✨ Zero Gateway Fees! Pay directly via UPI for instant activation.</p>
-                            </div>
-                        </div>
+                {error && (
+                    <div className="dash-error-banner" role="alert">
+                        <span>{error}</span>
+                        <button type="button" onClick={() => setError('')} aria-label="Dismiss error">✕</button>
                     </div>
                 )}
-            </div>
-        );
-    }
 
-    if (step === 'preparing') {
-        const analysisSteps = [
-            { id: 1, text: resumeFile ? "Parsing your professional resume" : "Initializing platform context" },
-            { id: 2, text: "Analyzing your experience & background" },
-            { id: 3, text: "Extracting core skills & focus areas" },
-            { id: 4, text: "Generating contextual interview questions" }
-        ];
-
-        return (
-            <div className="preparing-container">
-                <div className="analysis-card glass-card">
-                    <div className="analysis-left">
-                        {resumePreview ? (
-                            <div className="resume-preview-box">
-                                <div className="resume-info-badge">{resumeFile?.name}</div>
-                                <div className="resume-iframe-wrapper">
-                                    <iframe
-                                        src={resumePreview}
-                                        className="resume-embed-preview"
-                                        title="Resume Scan"
-                                    />
-                                </div>
-                                <div className="scanner-line"></div>
-                            </div>
-                        ) : (
-                            <div className="analysis-icon-container">
-                                {preparingStep === 4 ? "✨" : "🔍"}
-                            </div>
-                        )}
-                        <h2>{preparingStep === 4 ? "Finalizing..." : "Analyzing..."}</h2>
-                        <p>Our AI is tailoring questions based on your specific projects and skills.</p>
-                    </div>
-                    <div className="analysis-right">
-                        {analysisSteps.map(s => (
-                            <div key={s.id} className={`analysis-step ${preparingStep >= s.id ? 'active' : ''} ${preparingStep > s.id ? 'completed' : ''}`}>
-                                <div className="step-check">
-                                    {preparingStep > s.id ? "✓" : s.id}
-                                </div>
-                                <span className="step-text">{s.text}</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
-    if (step === 'briefing' && companyIntel) {
-        return (
-            <div className="briefing-overlay">
-                <div className="briefing-card glass-card">
-                    <div className="briefing-header">
-                        <div className="intel-badge">🚀 INTELLIGENCE BRIEFING</div>
-                        <h2>{companyIntel.name || sessionData.target_company}</h2>
-                        <p>{companyIntel.industry} • {companyIntel.size} company</p>
-                    </div>
-
-                    <div className="briefing-body">
-                        <div className="insight-section">
-                            <label>EXPERT RECONCILIATION</label>
-                            <p className="reconciliation-text">
-                                {companyIntel.intelligence_reconciliation || "We've synthesized this session based on your profile and target company dna."}
-                            </p>
-                        </div>
-
-                        <div className="briefing-grid">
-                            <div className="briefing-stat">
-                                <label>INTERVIEW STYLE</label>
-                                <span>{companyIntel.interview_style}</span>
-                            </div>
-                            <div className="briefing-stat">
-                                <label>DIFFICULTY</label>
-                                <span>{companyIntel.difficulty_level}</span>
-                            </div>
-                        </div>
-
-                        <div className="rounds-preview">
-                            <label>INTENDED ROUND SEQUENCE</label>
-                            <div className="rounds-list">
-                                {Object.keys(companyIntel.interview_rounds || {}).map((r, idx) => (
-                                    <div key={r} className={`round-item ${r === currentRound ? 'active' : ''}`}>
-                                        <span className="round-num">{idx + 1}</span>
-                                        <span className="round-name">{r}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="briefing-footer">
-                        <button className="primary-btn shimmer" onClick={() => { setShowBriefing(false); setStep('meeting'); }}>
-                            ENTER MEETING ROOM
-                        </button>
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
-
-    if (step === 'meeting') {
-        return (
-            <div className="meeting-container">
-                <div className="status-overlay">
-                    <div className="live-dot"></div>
-                    <span>LIVE INTERVIEW: {sessionData.target_company || "General Technical"} Round</span>
-                </div>
-                <div className="meeting-main">
-                    <div className="interviewer-view">
-                        <div className={`avatar-container ${sessionData.interviewer_name.toLowerCase()}-avatar`}>
-                            <div className="hair"></div>
-                            <div className="face-base">
-                                <div className="eye-pair">
-                                    <div className="eye"><div className="pupil" style={{ transform: isListening ? `translate(${(Math.random() - 0.5) * 15}px, ${(Math.random() - 0.5) * 15}px)` : 'translate(-50%, -50%)' }}></div></div>
-                                    <div className="eye"><div className="pupil" style={{ transform: isListening ? `translate(${(Math.random() - 0.5) * 15}px, ${(Math.random() - 0.5) * 15}px)` : 'translate(-50%, -50%)' }}></div></div>
-                                </div>
-                                <div className={`mouth ${isSpeaking ? 'speaking' : ''}`}></div>
-                            </div>
-                            <div className="message-bubble">
-                                <p>{messages[messages.length - 1].content}</p>
-                            </div>
-                        </div>
-                        <div className="candidate-view glass-card">
-                            <video ref={videoRef} autoPlay playsInline muted />
-                            {!isCamOn && <div className="cam-off-overlay"><span>CAMERA OFF</span></div>}
-                            <div className="candidate-name">YOU</div>
-                        </div>
-                    </div>
-                </div>
-                <div className="meeting-toolbar">
-                    <div className="toolbar-left">
-                        <div className="meeting-info">
-                            <span className="time-badge">{new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                            <span className="divider">|</span>
-                            <span className="session-title">Interview: {sessionData.target_company || "Contextual"} Round</span>
-                        </div>
-                    </div>
-
-                    <div className="toolbar-center">
-                        <button className={`tool-btn ${!isMicOn ? 'off' : ''}`} onClick={toggleMic} title={isMicOn ? "Mute" : "Unmute"}>
-                            {isMicOn ? '🎤' : '🎙️'}
-                        </button>
-                        <button className={`tool-btn ${!isCamOn ? 'off' : ''}`} onClick={toggleCam} title={isCamOn ? "Turn off camera" : "Turn on camera"}>
-                            {isCamOn ? '📹' : '📸'}
-                        </button>
-                        <div className="voice-input-preview">
-                            <span className="mic-wave"></span>
-                            {userInput || "AI is listening to your response..."}
-                        </div>
-                        <button className="tool-btn primary" onClick={submitAnswer} disabled={loading || isSpeaking}>
-                            {loading ? "EVALUATING..." : isSpeaking ? "AI SPEAKING..." : "SUBMIT RESPONSE"}
-                        </button>
-                    </div>
-
-                    <div className="toolbar-right">
-                        <div className="round-progress-capsule">
-                            Round {currentRoundNumber} • Q {questionCount}/5
-                        </div>
-                        <button className="tool-btn off end-btn" onClick={() => { window.speechSynthesis.cancel(); window.location.reload(); }}>
-                            LEAVE CALL
-                        </button>
-                    </div>
-                </div>
-                {showTransition && (
-                    <div className="round-transition-overlay">
-                        <div className="transition-content">
-                            <div className="round-badge">ROUND {currentRoundNumber + 1} STARTING</div>
-                            <h2>Great job in the {transitionData.prevRound} round!</h2>
-                            <div className="next-round-name">{transitionData.nextRound}</div>
-                            <div className="loader-bar-container"><div className="loader-bar"></div></div>
-                            <p className="transition-disclaimer"><b>Disclaimer:</b> Final candidate evaluation, detailed feedback, and ATS resume analysis will be generated <b>after all rounds</b> are successfully completed.</p>
-                        </div>
-                    </div>
+                {step === 'role' && (
+                    <RoleStep
+                        roles={roles}
+                        selectedRole={selectedRole}
+                        onSelectRole={handleSelectRole}
+                        searchQuery={searchQuery}
+                        onSearchChange={setSearchQuery}
+                        selectedCategory={selectedCategory}
+                        onCategoryChange={setSelectedCategory}
+                        seniorityLevel={seniorityLevel}
+                        onSeniorityChange={setSeniorityLevel}
+                        jd={{
+                            text: jdText,
+                            onTextChange: handleJdTextChange,
+                            analysis: jdAnalysis,
+                            analyzing: analyzingJd,
+                            error: jdError,
+                            onAnalyze: handleAnalyzeJd,
+                            onClear: handleClearJd,
+                        }}
+                        onContinue={() => setStep('company')}
+                    />
                 )}
-            </div>
-        );
-    }
 
-    if (step === 'result') {
-        return (
-            <div className="result-container executive-scorecard-view">
-                <div className="scorecard-header">
-                    <div className="verdict-badge">{masterReport?.final_verdict || (evaluation?.can_proceed ? "ROUND PASSED" : "TERMINATED")}</div>
-                    <h1>Executive Evaluation Report</h1>
-                    <p className="scorecard-subtitle">Performance Analysis for {sessionData.target_company} • {sessionData.sub_role}</p>
-                </div>
+                {step === 'company' && (
+                    <CompanyStep
+                        companies={companies}
+                        selectedCompany={selectedCompany}
+                        onSelectCompany={handleSelectCompany}
+                        selectedRole={selectedRole}
+                        seniorityLevel={seniorityLevel}
+                        onContinue={() => setStep('resume')}
+                    />
+                )}
 
-                <div className="scorecard-grid">
-                    {/* Left Column: Overall Metrics */}
-                    <div className="scorecard-column main-stats">
-                        <div className="glass-card stat-block overall-score-card">
-                            <label>CUMULATIVE SCORE</label>
-                            <div className="big-score">
-                                {masterReport?.overall_score?.toFixed(1) || evaluation?.score}
-                                <span>/10</span>
-                            </div>
-                            <p className="exec-summary">{evaluation?.executive_summary || "Session evaluation completed based on round-specific criteria."}</p>
-                        </div>
+                {step === 'resume' && (
+                    <ResumeStep
+                        selectedRole={selectedRole}
+                        seniorityLevel={seniorityLevel}
+                        selectedCompany={selectedCompany}
+                        savedResumes={savedResumes}
+                        activeResumeId={activeResumeId}
+                        busyResumeId={busyResumeId}
+                        loading={loading}
+                        maxResumeMb={MAX_RESUME_MB}
+                        onUseSaved={handleUseSaved}
+                        onDeleteSaved={handleDeleteSaved}
+                        onUpload={handleUpload}
+                    />
+                )}
 
-                        <div className="glass-card stat-block vibe-breakdown">
-                            <h3>VIBE & PRESENCE</h3>
-                            <div className="vibe-meters">
-                                <div className="meter-item">
-                                    <label>Confidence</label>
-                                    <div className="meter-bar"><div className="fill" style={{ width: `${(evaluation?.vibe_analysis?.confidence_score || 5) * 10}%` }}></div></div>
-                                </div>
-                                <div className="meter-item">
-                                    <label>Technical Depth</label>
-                                    <span className="meter-value">{evaluation?.vibe_analysis?.technical_depth || "Moderate"}</span>
-                                </div>
-                                <div className="meter-item">
-                                    <label>Assertiveness</label>
-                                    <p className="small-text">{evaluation?.vibe_analysis?.assertiveness || "Standard communication style observed."}</p>
-                                </div>
-                            </div>
-                        </div>
+                {step === 'skill-gap' && (skillGapData ? (
+                    <SkillGapStep
+                        skillGapData={skillGapData}
+                        quality={resumeQuality}
+                        jdSkillCount={jdRequiredSkills.length}
+                        loading={loading}
+                        onStartInterview={startInterview}
+                    />
+                ) : (
+                    <div className="dash-empty-step dash-glass">
+                        <p>Select or upload a resume to see your skill gap for {selectedRole?.name}.</p>
+                        <button className="btn-continue-primary" style={{ maxWidth: '280px' }} onClick={() => setStep('resume')}>
+                            Choose a Resume
+                        </button>
                     </div>
+                ))}
 
-                    {/* Right Column: Detailed Breakdown */}
-                    <div className="scorecard-column details">
-                        {currentRound === "Behavioral" && evaluation?.star_analysis && (
-                            <div className="glass-card stat-block star-assessment">
-                                <h3>STAR METHOD CHECKLIST</h3>
-                                <div className="star-checklist">
-                                    <div className={`star-item ${evaluation.star_analysis.has_situation ? 'checked' : ''}`}><span>S</span> Situation</div>
-                                    <div className={`star-item ${evaluation.star_analysis.has_task ? 'checked' : ''}`}><span>T</span> Task</div>
-                                    <div className={`star-item ${evaluation.star_analysis.has_action ? 'checked' : ''}`}><span>A</span> Action</div>
-                                    <div className={`star-item ${evaluation.star_analysis.has_result ? 'checked' : ''}`}><span>R</span> Result</div>
-                                </div>
-                                {evaluation.star_analysis.missing_parts?.length > 0 && (
-                                    <p className="improvement-note">💡 Missing: {evaluation.star_analysis.missing_parts.join(', ')}. Strengthen your narrative by including these.</p>
-                                )}
-                            </div>
-                        )}
+                {step === 'interview' && currentQuestion && (
+                    <InterviewStep
+                        selectedRole={selectedRole}
+                        seniorityLevel={seniorityLevel}
+                        selectedCompany={selectedCompany}
+                        question={currentQuestion}
+                        questionNumber={questionNumber}
+                        totalQuestions={totalQuestions}
+                        lastEvaluation={lastEvaluation}
+                        loading={loading}
+                        onSubmit={handleAnswerSubmit}
+                    />
+                )}
 
-                        <div className="glass-card stat-block feedback-log">
-                            <h3>{masterReport ? "EXECUTIVE CLOSING NOTE" : "RECRUITER FEEDBACK"}</h3>
-                            <p className="long-feedback">{masterReport?.recruiter_closing_note || evaluation?.feedback}</p>
-                        </div>
-
-                        {masterReport && (
-                            <div className="glass-card stat-block strengths-weaknesses">
-                                <div className="sw-grid">
-                                    <div className="sw-column">
-                                        <h4>STRENGTHS</h4>
-                                        <ul>{masterReport.key_strengths?.map(s => <li key={s}>✅ {s}</li>)}</ul>
-                                    </div>
-                                    <div className="sw-column">
-                                        <h4>AREAS TO IMPROVE</h4>
-                                        <ul>{masterReport.key_weaknesses?.map(w => <li key={w}>⚠️ {w}</li>)}</ul>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                </div>
-
-                <div className="scorecard-footer">
-                    <button className="secondary-btn" onClick={() => window.location.reload()}>RESTART MARATHON</button>
-                    <button className="primary-btn" onClick={() => setStep('setup')}>BACK TO DASHBOARD</button>
-                </div>
-            </div>
-        );
-    }
-}
+                {step === 'results' && finalResults && (
+                    <ResultsStep
+                        results={finalResults}
+                        selectedRole={selectedRole}
+                        seniorityLevel={seniorityLevel}
+                        selectedCompany={selectedCompany}
+                        onRestart={handleRestart}
+                    />
+                )}
+            </main>
+        </div>
+    );
+};
 
 export default Dashboard;

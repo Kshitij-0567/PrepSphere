@@ -1,86 +1,37 @@
-# Backend - InterviewAI Core
+# PrepSphere Backend
 
 **Architected & Authored by: [Karan Shelar](https://github.com/Edge-Explorer)**
 
-This directory contains the FastAPI-based backend for the InterviewAI platform. It handles authentication, interview session management, AI question generation via Gemini, company-specific interview intelligence, and result evaluation.
+FastAPI service for authentication, resume analysis, skill-gap scoring and AI mock interviews. See the [root README](../README.md) for the full picture.
 
-## 📂 File Structure & Responsibilities
-
-| File/Directory | Purpose |
-|----------------|---------|
-| `main.py` | The main entry point. Sets up FastAPI and all API endpoints. |
-| **`core/`** | **Foundational logic**: `database.py`, `models.py`, `schemas.py`, `round_config.py`. |
-| **`auth/`** | **Security**: Authentication utilities and token management. |
-| **`services/`** | **Intelligence**: Gemini, Agentic Researcher, and Curated Intelligence. |
-| **`tests/`** | **Verification**: All automated test cases and GPU diagnostics. |
-| **`scripts/`** | **Maintenance**: Utility scripts for DB management and data entry. |
-| **`data/`** | **Knowledge**: `company_profiles.json`, `discoveries.json`, and training data. |
-| **`interview_ai_model/`** | Fine-Tuned Llama-3 LoRA adapters (Excl. from Git). |
-
-## 🚀 Key Features
-
-1. **AI Interviewer**: Integrated with Google Gemini 2.0 Flash API to generate real-time, adaptive questions.
-2. **Company Intelligence System (v2.2.2)**: 
-   - **Tier 1 (Curated)**: Expert intelligence for **383 companies** (100% offline).
-   - **Tier 2 (Agentic Discovery)**: Live research via **DuckDuckGo** with **Evergreen Perpetual Freshness** (Auto-calculating Current Year).
-   - **Dynamic Domain Intelligence**: Automatically prevents "Role Forcing" in non-tech industries.
-   - **Geographic Guarding**: Dedicated router node to prevent cross-continental name collisions.
-   - **The Auditor (The Bouncer)**: Dedicated node that purges noise and verifies JD/Identity alignment.
-   - **Tier 3 (Stealth Mode)**: AI reverse-engineers company culture from the user's **JD**.
-   - **Tier 4 (Synthetic Logic)**: Industry-standard fallback with strict Identity Guarding (98% threshold).
-   - **The Brain**: Orchestrated by a 5-agent LangGraph team (Router-Researcher-Auditor-Architect-Critic).
-
-### 🛠️ Confidence & Reliability Matrix
-| Score | Meaning | Logic |
-| :--- | :--- | :--- |
-| **0 - 20** | **Synthetic** | Fallback to industry-standard benchmarks. |
-| **85** | **Verified** | Successful research + identity verification. |
-| **100+** | **Elite Certified** | Multi-source verification + location/industry match. |
-3. **Contextual Analysis**: Processes PDF resumes to tailor interview topics to the user's specific background.
-4. **Cloud-Ready Infrastructure**: Fully integrated with **Neon PostgreSQL** for serverless, cloud-side data storage.
-5. **Multi-Round System**: Supports 5 interview rounds (Technical, Behavioral, System Design, Managerial, Final).
-
-## 🛠 Tech Stack
-
-- **Framework**: FastAPI (Python 3.11+)
-- **Database**: Neon PostgreSQL (SQLAlchemy ORM + Alembic)
-- **Agents**: LangGraph + LangChain
-- **Search**: duckduckgo-search (DDGS)
-- **AI**: Google Gemini 2.0 Flash & Fine-Tuned Llama-3-8B
-- **Auth**: JWT with SHA-256 + Bcrypt double-hashing
-
-## 🏢 Intelligence Database Coverage (383 Companies)
-
-The system features at least **20 companies** in every single category:
-
-- 🔹 **Engineering & Tech**: 134 companies (FAANG, SaaS, AI, etc.)
-- 🔹 **Business & Management**: 23 companies (Staffing, HR, Business)
-- 🔹 **Construction & Trades**: 23 companies (Heavy Engineering, Infra)
-- 🔹 **Social Services**: 23 companies (Non-profits, Foundations)
-- 🔹 **Finance & Accounting**: 22 companies (Fintech, Banking, Trading)
-- 🔹 **Healthcare & Medical**: 22 companies (Biotech, Pharma, Health IT)
-- 🔹 **Legal**: 22 companies (Law firms, Legal Tech)
-- 🔹 **Science & Research**: 22 companies (Research Labs, Space)
-- 🔹 **Hospitality & Tourism**: 21 companies (Travel, Food, Booking)
-- 🔹 **Creative & Design**: 21 companies (Media, Animation, VFX)
-- 🔹 **Education & Training**: 21 companies (EdTech, Universities)
-- 🔹 **Sales & Marketing**: 20 companies (Advertising, Market Research)
-
-Each company profile includes:
-- Interview style (technical-heavy, culture-fit-heavy, etc.)
-- Cultural values and leadership principles
-- Round-specific focus areas and common topics
-- Interview tips and red flags
-- Average process duration
-
-## 🧪 Testing
-
-Run the Agentic Intelligence test:
 ```bash
-.\venv\Scripts\python tests\test_intelligence_agent.py "Google"
+python -m venv venv && source venv/bin/activate   # Windows: .\venv\Scripts\activate
+pip install -r requirements-dev.txt
+cp .env.example .env    # set SECRET_KEY
+python main.py          # http://127.0.0.1:8000/docs
+pytest                  # run the test suite
 ```
 
-Run fuzzy matching benchmarks:
+## Layout
+
+| Path | Purpose |
+| --- | --- |
+| `main.py` | App setup and all HTTP endpoints |
+| `core/config.py` | Every environment setting, read once |
+| `core/models.py`, `core/schemas.py` | Database models and API schemas |
+| `core/migrations.py`, `migrations/` | Alembic migrations, applied automatically at startup |
+| `core/seed_data.py`, `core/company_data.py` | Role/skill catalog and company data (synced at startup, updated in place) |
+| `services/` | Gemini, resume, job description, skill taxonomy, skill gap and candidate profile logic |
+| `tests/` | pytest suite (throwaway SQLite database, no API keys needed) |
+
+## Database migrations
+
+Schema changes go through Alembic:
+
 ```bash
-.\venv\Scripts\python tests\test_fuzzy_matching.py
+# after editing core/models.py
+alembic revision --autogenerate -m "describe the change"
+# review the generated file in migrations/versions/, then restart the app (or run: alembic upgrade head)
 ```
+
+The folders `alembic/`, `scripts/`, `data/`, `services/intelligence_service.py`, `services/company_intelligence.py`, `services/memory_service.py`, `core/round_config.py` and the older test files belong to the legacy InterviewAI prototype. The app does not use them, and they can be deleted.

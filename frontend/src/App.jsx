@@ -4,6 +4,7 @@ import LandingPage from './pages/LandingPage';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Dashboard from './pages/Dashboard';
+import { clearSession, hasValidSession } from './api/session';
 
 // CSS Imports
 import './App.css';
@@ -11,8 +12,9 @@ import './pages/LandingPage.css';
 import './pages/Auth.css';
 
 const PrivateRoute = ({ children }) => {
-  const isAuthenticated = !!localStorage.getItem('token');
-  return isAuthenticated ? children : <Navigate to="/login" />;
+  if (hasValidSession()) return children;
+  clearSession();
+  return <Navigate to="/login" replace />;
 };
 
 function App() {
@@ -30,6 +32,7 @@ function App() {
             </PrivateRoute>
           }
         />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Router>
   );
