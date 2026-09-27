@@ -232,7 +232,10 @@ def build_profile_summary(db: Session, user: models.User) -> Dict[str, Any]:
     scored_answers = [a for a in answers if a.score is not None and a.question]
     if scored_answers:
         best = max(scored_answers, key=lambda a: a.score)
-        insights.append({"kind": "good", "title": f"Your best answer scored {best.score:.1f}", "text": _excerpt(best.question.question_text, 120)})
+        if best.score >= 7:
+            insights.append({"kind": "good", "title": f"Your best answer scored {best.score:.1f}", "text": _excerpt(best.question.question_text, 120)})
+        else:
+            insights.append({"kind": "accent", "title": f"Highest score so far: {best.score:.1f}", "text": f"On: {_excerpt(best.question.question_text, 110)}"})
     if summary["quality"] and summary["quality"]["answers"] >= 3:
         lowest = summary["quality"]["lowest"]
         insights.append({
