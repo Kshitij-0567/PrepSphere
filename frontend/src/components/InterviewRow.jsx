@@ -1,11 +1,11 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Globe } from 'lucide-react';
+import { Globe, Video } from 'lucide-react';
 import { useFeedback } from './ui/feedbackContext';
-import { BAND, formatDate, scoreBand } from '../utils/format';
+import { BAND, formatDate, resumePath, scoreBand } from '../utils/format';
 
 /**
- * One interview: who/when, five question scores, and the next action
+ * One interview: who/when, a score per question (text) or per step (video), and the next action
  * (resume an unfinished interview or open the results of a finished one).
  */
 const InterviewRow = ({ interview }) => {
@@ -13,18 +13,21 @@ const InterviewRow = ({ interview }) => {
     const { tipAt, hideTip } = useFeedback();
     const live = interview.status !== 'completed';
     const questions = interview.questions;
+    const video = interview.mode === 'video';
+    const unit = video ? 'Step' : 'Q';
+    const unitLong = video ? 'Step' : 'Question';
 
     const cellTip = (el, q, i) => {
         if (q.score == null) {
             tipAt(el, i === interview.current_index && q.topic
-                ? <><strong>Q{i + 1} · waiting for your answer</strong><span>{q.topic}</span></>
-                : <><strong>Q{i + 1}</strong><span>Not asked yet. Questions adapt to your earlier answers.</span></>);
+                ? <><strong>{unit}{video ? ' ' : ''}{i + 1} · waiting for your answer</strong><span>{q.topic}</span></>
+                : <><strong>{unit}{video ? ' ' : ''}{i + 1}</strong><span>{video ? 'Not reached yet.' : 'Not asked yet. Questions adapt to your earlier answers.'}</span></>);
             return;
         }
         const band = BAND[scoreBand(q.score)];
         tipAt(el, (
             <>
-                <strong>Q{i + 1} · {q.score.toFixed(1)} / 10</strong>
+                <strong>{unit}{video ? ' ' : ''}{i + 1} · {q.score.toFixed(1)} / 10</strong>
                 {q.topic && <span>{q.topic}</span>}
                 <span className="ps-tip-row"><i className="ps-sw" style={{ '--c': band.hex }} />{band.label}</span>
                 {q.approx && <span>Approximate score: the AI evaluator was unavailable.</span>}
@@ -39,7 +42,7 @@ const InterviewRow = ({ interview }) => {
                     {interview.company ? interview.company.slice(0, 2) : <Globe size={16} aria-hidden="true" />}
                 </span>
                 <div>
-                    <strong>{interview.role}</strong>
+                    <strong>{interview.role}{video && <span className="ps-mode-tag"><Video size={11} aria-hidden="true" />Video</span>}</strong>
                     <span>
                         {interview.company || 'General standard'} · {interview.seniority} · {formatDate(interview.date)}
                         {live && <> · <span className="ps-live" style={{ display: 'inline' }}>in progress</span></>}
@@ -49,7 +52,7 @@ const InterviewRow = ({ interview }) => {
             <div className="ps-scores">
                 {questions.map((q, i) => {
                     const current = live && i === interview.current_index;
-                    const label = q.score != null ? `Question ${i + 1}: ${q.score.toFixed(1)}` : `Question ${i + 1}: ${current ? 'waiting for your answer' : 'not asked yet'}`;
+                    const label = q.score != null ? `${unitLong} ${i + 1}: ${q.score.toFixed(1)}` : `${unitLong} ${i + 1}: ${current ? 'waiting for your answer' : 'not asked yet'}`;
                     return (
                         <span
                             key={i}
@@ -72,7 +75,7 @@ const InterviewRow = ({ interview }) => {
                 {live ? (
                     <>
                         <div className="ps-s-stat"><b>{interview.answered} of {interview.total}</b>answered</div>
-                        <button className="ps-btn ps-btn-sm ps-btn-primary" type="button" onClick={() => navigate(`/dashboard?resume=${interview.id}`)}>Resume</button>
+                        <button className="ps-btn ps-btn-sm ps-btn-primary" type="button" onClick={() => navigate(resumePath(interview))}>Resume</button>
                     </>
                 ) : (
                     <>

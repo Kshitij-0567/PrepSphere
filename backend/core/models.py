@@ -114,6 +114,8 @@ class Interview(Base):
     job_description = Column(Text, nullable=True) # optional JD the candidate pasted
     jd_skills = Column(JSON, default=[]) # required skills extracted from the JD
     overall_score = Column(Float, nullable=True)
+    mode = Column(String, default="text", server_default="text", nullable=False) # text, video
+    plan = Column(JSON, nullable=True) # video interviews: ordered steps (services/interview_plan.py)
     started_at = Column(DateTime, default=utcnow)
     completed_at = Column(DateTime, nullable=True)
 
@@ -132,6 +134,10 @@ class Question(Base):
     question_text = Column(Text)
     difficulty = Column(String, default="Medium") # Easy, Medium, Hard
     expected_concepts = Column(JSON, default=[]) # e.g. ["Indexing", "Query Plan"]
+    kind = Column(String, default="spoken", server_default="spoken", nullable=False) # spoken, code, design
+    step_index = Column(Integer, nullable=True) # video interviews: position in interview.plan
+    parent_id = Column(Integer, ForeignKey("questions.id"), nullable=True) # set on follow-up questions
+    details = Column(JSON, nullable=True) # coding problem or design brief shown with the question
 
     interview = relationship("Interview", back_populates="questions")
     answers = relationship("Answer", back_populates="question")
@@ -145,6 +151,13 @@ class Answer(Base):
     score = Column(Float) # 0.0 to 10.0
     rubric_json = Column(JSON, default={}) # { correctness, relevance, completeness, detected_concepts, missing_concepts }
     feedback = Column(Text)
+    # Video interviews only
+    transcript_source = Column(String, nullable=True) # ai, captions, typed
+    segments = Column(JSON, nullable=True) # [{"start": seconds, "text": "..."}]
+    code = Column(Text, nullable=True)
+    code_language = Column(String, nullable=True)
+    diagram_image = Column(Text, nullable=True) # PNG data URL of the whiteboard
+    delivery = Column(JSON, nullable=True) # pace, filler words, pauses, eye contact
     evaluated_at = Column(DateTime, default=utcnow)
 
     interview = relationship("Interview", back_populates="answers")

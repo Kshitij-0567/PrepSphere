@@ -4,7 +4,7 @@ import { AlertTriangle, ArrowRight, Crosshair, Github, Loader2, RefreshCw, Star,
 import api, { apiErrorMessage } from '../../api/client';
 import InterviewRow, { ScoreKey } from '../../components/InterviewRow';
 import { useFeedback } from '../../components/ui/feedbackContext';
-import { SKILL_STATUS, formatDate, relativeTime } from '../../utils/format';
+import { SKILL_STATUS, formatDate, relativeTime, resumePath } from '../../utils/format';
 
 /* ---------------- Stat tiles ---------------- */
 const Sparkline = ({ trend }) => {
@@ -88,12 +88,12 @@ export const NextStepCard = ({ nextStep, stats }) => {
             <article className="ps-card ps-next-card" aria-labelledby="ps-next-title">
                 <p className="ps-label">Pick up where you left off</p>
                 <h2 id="ps-next-title">{nextStep.company ? `${nextStep.company} · ` : ''}{nextStep.role}, {nextStep.seniority}</h2>
-                <p>Question {nextStep.answered + 1}: {nextStep.question}</p>
+                <p>{nextStep.mode === 'video' ? 'Step' : 'Question'} {nextStep.answered + 1}: {nextStep.question}</p>
                 <div className="ps-next-meta"><span>{nextStep.answered} of {nextStep.total} answered</span><span>Started {formatDate(nextStep.started_at)}</span></div>
-                <div className="ps-meter" role="img" aria-label={`${nextStep.answered} of ${nextStep.total} questions answered`}>
+                <div className="ps-meter" role="img" aria-label={`${nextStep.answered} of ${nextStep.total} ${nextStep.mode === 'video' ? 'steps' : 'questions'} answered`}>
                     <i style={{ width: `${(nextStep.answered / nextStep.total) * 100}%` }} />
                 </div>
-                <button className="ps-btn ps-btn-primary" type="button" onClick={() => navigate(`/dashboard?resume=${nextStep.interview_id}`)}>Resume interview</button>
+                <button className="ps-btn ps-btn-primary" type="button" onClick={() => navigate(resumePath({ id: nextStep.interview_id, mode: nextStep.mode }))}>Resume interview</button>
             </article>
         );
     }

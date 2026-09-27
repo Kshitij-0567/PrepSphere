@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, LogOut } from 'lucide-react';
+import { Loader2, LogOut, Trash2 } from 'lucide-react';
 import api, { apiErrorMessage } from '../api/client';
 import { clearSession } from '../api/session';
 import { useApp } from '../components/layout/appContext';
 import { useFeedback } from '../components/ui/feedbackContext';
 import LinkedProfiles from './profile/LinkedProfiles';
+import { KEEP_INTERVIEWS, deleteAllClips, formatBytes, usage } from './interview/lib/recordings';
 
 const AccountForm = ({ user, onSaved }) => {
     const { toast } = useFeedback();
@@ -48,6 +49,51 @@ const AccountForm = ({ user, onSaved }) => {
                 </button>
             </div>
         </form>
+    );
+};
+
+const RecordingsCard = () => {
+    const { toast } = useFeedback();
+    const [info, setInfo] = useState(null);
+    const [confirming, setConfirming] = useState(false);
+
+    useEffect(() => {
+        let cancelled = false;
+        usage().then(u => { if (!cancelled) setInfo(u); });
+        return () => { cancelled = true; };
+    }, []);
+
+    const clearAll = async () => {
+        await deleteAllClips();
+        setInfo({ interviews: 0, bytes: 0 });
+        setConfirming(false);
+        toast('All interview recordings were deleted from this device.');
+    };
+
+    return (
+        <article className="ps-card" aria-labelledby="ps-rec-title">
+            <div className="ps-card-head" style={{ marginBottom: 12 }}>
+                <div>
+                    <h2 className="ps-card-title" id="ps-rec-title">Interview recordings</h2>
+                    <p className="ps-card-sub">Video interviews are recorded in this browser only, so you can replay them. They are never uploaded. The last {KEEP_INTERVIEWS} interviews are kept.</p>
+                </div>
+            </div>
+            {!info ? <div className="ps-skeleton" style={{ height: 40 }} /> : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                    <span className="ps-muted">{info.interviews ? `${info.interviews} interview${info.interviews === 1 ? '' : 's'} · ${formatBytes(info.bytes)} on this device` : 'No recordings on this device.'}</span>
+                    {confirming ? (
+                        <>
+                            <button className="ps-btn ps-btn-sm" type="button" onClick={() => setConfirming(false)}>Cancel</button>
+                            <button className="ps-btn ps-btn-sm ps-btn-danger" type="button" onClick={clearAll}>Delete {info.interviews === 1 ? 'it' : `all ${info.interviews}`}</button>
+                        </>
+                    ) : (
+                        <button className="ps-btn ps-btn-sm ps-btn-danger" type="button" onClick={() => setConfirming(true)} disabled={!info.interviews}>
+                            <Trash2 size={14} aria-hidden="true" /> Delete all recordings
+                        </button>
+                    )}
+                </div>
+            )}
+        </article>
     );
 };
 
@@ -97,6 +143,8 @@ const SettingsPage = () => {
                 {error && <div className="ps-banner ps-banner-error" role="alert">{error}</div>}
                 {links ? <LinkedProfiles links={links} github={github} onChanged={loadLinks} /> : !error && <div className="ps-skeleton" style={{ height: 120 }} />}
             </article>
+
+            <RecordingsCard />
 
             <article className="ps-card" aria-labelledby="ps-session-title">
                 <div className="ps-card-head" style={{ marginBottom: 12 }}>

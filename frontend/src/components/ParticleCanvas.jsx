@@ -1,82 +1,45 @@
 import React, { useEffect, useRef } from 'react';
 
+const TRAIL_MS = 420;     // how long a point stays in the cursor trail
+const MAX_POINTS = 48;
+
+/**
+ * Workspace background effect: a single soft line that follows the cursor and fades from its
+ * tail, plus a small burst of dots on click. Off when the user prefers reduced motion.
+ */
 const ParticleCanvas = () => {
     const canvasRef = useRef(null);
 
     useEffect(() => {
         const canvas = canvasRef.current;
-        if (!canvas) return;
+        if (!canvas || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return undefined;
         const ctx = canvas.getContext('2d');
         let animationFrameId;
-
-        let width = canvas.width = window.innerWidth;
-        let height = canvas.height = window.innerHeight;
+        let dpr = Math.min(2, window.devicePixelRatio || 1);
 
         const handleResize = () => {
-            width = canvas.width = window.innerWidth;
-            height = canvas.height = window.innerHeight;
+            dpr = Math.min(2, window.devicePixelRatio || 1);
+            canvas.width = window.innerWidth * dpr;
+            canvas.height = window.innerHeight * dpr;
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         };
+        handleResize();
         window.addEventListener('resize', handleResize);
 
-        const mouse = {
-            x: null,
-            y: null,
-            lastX: null,
-            lastY: null
-        };
+        const trail = [];
+        const sparks = [];
 
-        const particles = [];
-        const connectionRadius = 140;
-
-        // Spawn a subtle particle at the cursor position
         const handleMouseMove = (e) => {
-            mouse.x = e.clientX;
-            mouse.y = e.clientY;
-
-            // Only spawn if mouse moved a bit
-            const dist = mouse.lastX !== null ? Math.hypot(e.clientX - mouse.lastX, e.clientY - mouse.lastY) : 10;
-            if (dist > 8) {
-                particles.push({
-                    x: e.clientX,
-                    y: e.clientY,
-                    vx: (Math.random() - 0.5) * 0.8,
-                    vy: (Math.random() - 0.5) * 0.8,
-                    radius: Math.random() * 1.5 + 1.2,
-                    alpha: 0.7, // Start light
-                    maxLife: 160 + Math.random() * 60, // Lifespan frames
-                    life: 0,
-                    isBurst: false
-                });
-                mouse.lastX = e.clientX;
-                mouse.lastY = e.clientY;
-            }
-
-            // Keep max active particles modest for smoothness & subtlety
-            if (particles.length > 45) {
-                particles.shift();
-            }
+            trail.push({ x: e.clientX, y: e.clientY, t: performance.now() });
+            if (trail.length > MAX_POINTS) trail.shift();
         };
-
-        const handleMouseLeave = () => {
-            mouse.x = null;
-            mouse.y = null;
-        };
-
+        const handleMouseLeave = () => { trail.length = 0; };
         const handleClick = (e) => {
-            // Disperse nearby particles into soft white dots
-            particles.forEach(p => {
-                const dx = p.x - e.clientX;
-                const dy = p.y - e.clientY;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist < 180) {
-                    const angle = Math.atan2(dy, dx);
-                    const force = (180 - dist) * 0.12;
-                    p.vx += Math.cos(angle) * force;
-                    p.vy += Math.sin(angle) * force;
-                    p.isBurst = true;
-                    p.alpha = 0.9;
-                }
-            });
+            for (let i = 0; i < 8; i++) {
+                const angle = (Math.PI * 2 * i) / 8 + Math.random() * 0.4;
+                const speed = 1.2 + Math.random() * 1.4;
+                sparks.push({ x: e.clientX, y: e.clientY, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: 0, maxLife: 34 + Math.random() * 16 });
+            }
         };
 
         window.addEventListener('mousemove', handleMouseMove);
@@ -84,75 +47,43 @@ const ParticleCanvas = () => {
         window.addEventListener('click', handleClick);
 
         const animate = () => {
-            ctx.clearRect(0, 0, width, height);
+            const now = performance.now();
+            ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
 
-            // Process particles
-            for (let i = particles.length - 1; i >= 0; i--) {
-                const p = particles[i];
+            while (trail.length && now - trail[0].t > TRAIL_MS) trail.shift();
 
-                p.x += p.vx;
-                p.y += p.vy;
-
-                // Friction
-                p.vx *= 0.96;
-                p.vy *= 0.96;
-
-                p.life++;
-
-                // Smooth fade out as particle ages
-                const fadeFactor = 1 - (p.life / p.maxLife);
-                const currentAlpha = Math.max(0, p.alpha * fadeFactor);
-
-                if (p.life >= p.maxLife || currentAlpha <= 0.01) {
-                    particles.splice(i, 1);
-                    continue;
+            // One continuous line: smoothed through the midpoints, thicker and brighter at the cursor.
+            if (trail.length > 2) {
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                for (let i = 2; i < trail.length; i++) {
+                    const a = trail[i - 2], b = trail[i - 1], c = trail[i];
+                    const fresh = 1 - Math.min(1, (now - b.t) / TRAIL_MS);
+                    ctx.beginPath();
+                    ctx.moveTo((a.x + b.x) / 2, (a.y + b.y) / 2);
+                    ctx.quadraticCurveTo(b.x, b.y, (b.x + c.x) / 2, (b.y + c.y) / 2);
+                    ctx.strokeStyle = `rgba(165, 180, 252, ${(fresh * 0.55).toFixed(3)})`;
+                    ctx.lineWidth = 0.6 + fresh * 1.8;
+                    ctx.shadowBlur = 6 * fresh;
+                    ctx.shadowColor = '#818cf8';
+                    ctx.stroke();
                 }
-
-                // Draw Light White / Indigo Dot
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-                ctx.fillStyle = p.isBurst 
-                    ? `rgba(255, 255, 255, ${currentAlpha})` 
-                    : `rgba(165, 180, 252, ${currentAlpha * 0.85})`;
-                ctx.shadowBlur = p.isBurst ? 8 : 4;
-                ctx.shadowColor = p.isBurst ? '#ffffff' : '#818cf8';
-                ctx.fill();
                 ctx.shadowBlur = 0;
+            }
 
-                // Draw Smooth Lines between nearby trail particles
-                for (let j = i - 1; j >= 0; j--) {
-                    const p2 = particles[j];
-                    const dx = p.x - p2.x;
-                    const dy = p.y - p2.y;
-                    const dist = Math.sqrt(dx * dx + dy * dy);
-
-                    if (dist < connectionRadius) {
-                        const lineAlpha = (1 - dist / connectionRadius) * currentAlpha * 0.4;
-                        ctx.beginPath();
-                        ctx.moveTo(p.x, p.y);
-                        ctx.lineTo(p2.x, p2.y);
-                        ctx.strokeStyle = `rgba(129, 140, 248, ${lineAlpha})`;
-                        ctx.lineWidth = 0.8;
-                        ctx.stroke();
-                    }
-                }
-
-                // Draw line to current cursor position if close
-                if (mouse.x !== null && mouse.y !== null) {
-                    const mdx = mouse.x - p.x;
-                    const mdy = mouse.y - p.y;
-                    const mdist = Math.sqrt(mdx * mdx + mdy * mdy);
-
-                    if (mdist < 160) {
-                        const cursorLineAlpha = (1 - mdist / 160) * currentAlpha * 0.5;
-                        ctx.beginPath();
-                        ctx.moveTo(p.x, p.y);
-                        ctx.lineTo(mouse.x, mouse.y);
-                        ctx.strokeStyle = `rgba(168, 85, 247, ${cursorLineAlpha})`;
-                        ctx.lineWidth = 0.9;
-                        ctx.stroke();
-                    }
-                }
+            for (let i = sparks.length - 1; i >= 0; i--) {
+                const s = sparks[i];
+                s.x += s.vx;
+                s.y += s.vy;
+                s.vx *= 0.92;
+                s.vy *= 0.92;
+                s.life++;
+                const alpha = 1 - s.life / s.maxLife;
+                if (alpha <= 0) { sparks.splice(i, 1); continue; }
+                ctx.beginPath();
+                ctx.arc(s.x, s.y, 1.4, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255, 255, 255, ${(alpha * 0.8).toFixed(3)})`;
+                ctx.fill();
             }
 
             animationFrameId = requestAnimationFrame(animate);
@@ -172,6 +103,7 @@ const ParticleCanvas = () => {
     return (
         <canvas
             ref={canvasRef}
+            aria-hidden="true"
             style={{
                 position: 'fixed',
                 top: 0,

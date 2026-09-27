@@ -3,6 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import api, { apiErrorMessage } from '../api/client';
 import ResultsStep from './dashboard/ResultsStep';
+import VideoResults from './interview/results/VideoResults';
+import { resumePath } from '../utils/format';
 import './Dashboard.css';
 
 const InterviewResultsPage = () => {
@@ -19,6 +21,10 @@ const InterviewResultsPage = () => {
         return () => { cancelled = true; };
     }, [id]);
 
+    if (results && results.status === 'completed' && results.mode === 'video') {
+        return <div className="ps-page"><VideoResults results={results} /></div>;
+    }
+
     return (
         <div className="ps-page">
             <div>
@@ -32,8 +38,8 @@ const InterviewResultsPage = () => {
                 <div className="ps-card">
                     <div className="ps-empty">
                         <strong>This interview is not finished yet</strong>
-                        <span>{results.questions_answered} of {results.total_questions} questions answered. Finish it to see your full results.</span>
-                        <button className="ps-btn ps-btn-primary" type="button" onClick={() => navigate(`/dashboard?resume=${results.interview_id}`)}>Resume interview</button>
+                        <span>{results.questions_answered} of {results.total_questions} {results.mode === 'video' ? 'steps' : 'questions'} answered. Finish it to see your full results.</span>
+                        <button className="ps-btn ps-btn-primary" type="button" onClick={() => navigate(resumePath({ id: results.interview_id, mode: results.mode }))}>Resume interview</button>
                     </div>
                 </div>
             )}

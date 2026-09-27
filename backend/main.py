@@ -1,3 +1,5 @@
+import base64
+import json
 import logging
 import os
 import re
@@ -6,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -19,11 +21,13 @@ from auth import auth_utils
 from core import database, models, schemas, seed_data
 from core.config import QUESTIONS_PER_INTERVIEW, settings
 from core.migrations import run_migrations
-from services import github_service
+from services import delivery as delivery_service
+from services import github_service, video_interview
 from services.candidate_profile import (
     activate_resume, candidate_skill_names, clear_resume_skills, get_active_resume, replace_github_skills,
 )
 from services.gemini_service import gemini_service
+from services.interview_plan import MAX_FOLLOW_UPS, build_plan, plan_minutes
 from services.profile_summary import build_profile_summary
 from services.jd_intelligence import jd_intelligence_service
 from services.resume_intelligence import resume_intelligence_service
@@ -32,7 +36,7 @@ from services.skill_gap import HIGH_IMPORTANCE, compute_skill_gap, merge_jd_requ
 logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("prepsphere")
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 ALLOWED_RESUME_EXTENSIONS = (".pdf", ".docx", ".txt")
 LINKEDIN_URL = re.compile(r"^(?:https?://)?(?:[a-z]{2,3}\.)?linkedin\.com/in/([A-Za-z0-9_%-]{3,100})/?(?:\?.*)?$", re.IGNORECASE)
 LINKEDIN_HANDLE = re.compile(r"^[A-Za-z0-9_-]{3,100}$")
@@ -423,6 +427,15 @@ async def get_role(role_id: int, db: Session = Depends(database.get_db)):
 
 # --- RESUME & SKILL EXTRACTION ENDPOINTS (SRS FR-04, FR-05, FR-06, FR-07) ---
 
+@app.get("/roles/{role_id}/video-plan")
+async def get_video_plan(role_id: int, seniority: schemas.Seniority = "Mid", db: Session = Depends(database.get_db)):
+    """The steps a video interview for this role and seniority would have, shown before it starts."""
+    role = db.get(models.Role, role_id)
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    plan = build_plan(role.category, seniority)
+    return {"plan": plan, "minutes": plan_minutes(plan)}
+
 @app.post("/resumes/upload")
 async def upload_resume(
     file: UploadFile = File(...),
@@ -611,6 +624,122 @@ async def get_company(company_id: int, db: Session = Depends(database.get_db)):
 
 # --- MOCK INTERVIEW ENDPOINTS (SRS FR-09 to FR-14) ---
 
+# Browsers send each spoken answer as 16 kHz WAV; other formats Gemini can read are accepted too.
+# WebM and MP4 recordings go to Gemini's video decoder, which also reads audio-only files.
+ANSWER_AUDIO_TYPES = {
+    "audio/wav": "audio/wav", "audio/x-wav": "audio/wav", "audio/wave": "audio/wav", "audio/mp3": "audio/mp3",
+    "audio/mpeg": "audio/mp3", "audio/aac": "audio/aac", "audio/ogg": "audio/ogg", "audio/flac": "audio/flac",
+    "audio/webm": "video/webm", "video/webm": "video/webm", "audio/mp4": "video/mp4",
+}
+MAX_DIAGRAM_BYTES = 4 * 1024 * 1024
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def _is_video(interview: models.Interview) -> bool:
+    return (interview.mode or "text") == "video"
+
+
+def _total_questions(interview: models.Interview) -> int:
+    """Questions in a text interview; steps in a video interview."""
+    return len(interview.plan or []) if _is_video(interview) else QUESTIONS_PER_INTERVIEW
+
+
+def _sorted_answers(interview: models.Interview) -> List[models.Answer]:
+    return sorted(interview.answers, key=lambda a: a.id)
+
+
+def _step_scores(items) -> Dict[int, float]:
+    """Average score per plan step from (step_index, score) pairs; a follow-up shares its step."""
+    by_step: Dict[int, List[float]] = {}
+    for step_index, score in items:
+        if step_index is not None and score is not None:
+            by_step.setdefault(step_index, []).append(score)
+    return {i: round(sum(v) / len(v), 1) for i, v in sorted(by_step.items())}
+
+
+def _answer_pairs(answers: List[models.Answer]) -> List[tuple]:
+    return [(a.question.step_index if a.question else None, a.score) for a in answers]
+
+
+def _overall_score(interview: models.Interview, pairs: List[tuple]) -> Optional[float]:
+    if _is_video(interview):
+        scores = list(_step_scores(pairs).values())
+    else:
+        scores = [score for _, score in pairs if score is not None]
+    return round(sum(scores) / len(scores), 1) if scores else None
+
+
+def _video_context(db: Session, interview: models.Interview, user: models.User) -> Dict[str, Any]:
+    context = _generation_context(db, interview, user)
+    context["role_category"] = interview.role.category if interview.role else None
+    name = (user.name or "").strip()
+    context["candidate_name"] = name.split()[0] if name else None
+    return context
+
+
+def _video_history(answers: List[models.Answer]) -> List[Dict[str, Any]]:
+    return [
+        {"question": a.question.question_text, "answer_summary": (a.answer_text or a.code or "")[:250]}
+        for a in answers if a.question
+    ]
+
+
+async def _completion_recommendations(
+    db: Session, interview: models.Interview, user: models.User, rubrics: List[Dict[str, Any]],
+    deliveries: List[Optional[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    """Study-plan items for a finished interview: missing role skills, missed concepts, delivery habits."""
+    if not rubrics:
+        return []
+    weak_topics: List[str] = []
+    for rubric in rubrics:
+        for concept in rubric.get("missing_concepts", []):
+            if concept not in weak_topics:
+                weak_topics.append(concept)
+    context = _generation_context(db, interview, user)
+    requirements = merge_jd_requirements(_role_requirements(interview.role), interview.jd_skills or [])
+    missing_skills = [
+        name for name, weight in unmet_requirements(requirements, context["candidate_skills"])
+        if weight >= HIGH_IMPORTANCE
+    ]
+    recs = await gemini_service.generate_recommendations(
+        missing_skills=missing_skills[:5], weak_topics=weak_topics[:8], role_name=context["role_name"]
+    )
+    if _is_video(interview):
+        recs = recs[:4] + delivery_service.delivery_tips(delivery_service.summarize(deliveries))[:2]
+    return recs
+
+
+def _mark_completed(db: Session, interview: models.Interview, user: models.User,
+                    overall: Optional[float], recs: List[Dict[str, Any]]) -> None:
+    interview.status = "completed"
+    interview.overall_score = overall
+    interview.completed_at = models.utcnow()
+    for r in recs:
+        db.add(models.Recommendation(
+            user_id=user.id, interview_id=interview.id, topic=r["topic"], priority=r["priority"], reason=r["reason"],
+        ))
+
+
+def _new_question(interview: models.Interview, q_data: Dict[str, Any], **extra) -> models.Question:
+    return models.Question(
+        interview_id=interview.id,
+        question_text=q_data["question_text"],
+        difficulty=q_data.get("difficulty", "Medium"),
+        expected_concepts=q_data.get("expected_concepts", []),
+        **extra,
+    )
+
+
+async def _step_question(db: Session, interview: models.Interview, user: models.User, step_index: int,
+                         history: List[Dict[str, Any]]) -> models.Question:
+    step = interview.plan[step_index]
+    q_data = await video_interview.generate_step_question(
+        step, _video_context(db, interview, user), history, seed=(interview.id or 0) + step_index,
+    )
+    return _new_question(interview, q_data, kind=step["kind"], step_index=step_index, details=q_data.get("details"))
+
+
 @app.post("/interviews")
 async def create_interview(
     data: schemas.InterviewCreate,
@@ -644,34 +773,41 @@ async def create_interview(
         seniority=data.seniority,
         job_description=jd_text or None,
         jd_skills=jd_skills,
+        mode=data.mode,
+        plan=build_plan(role.category, data.seniority) if data.mode == "video" else None,
     )
     interview.role = role
     interview.company = company
 
     # Generate the first question before writing anything, so no database lock is held
     # while waiting on the AI model.
-    q_data = await gemini_service.generate_question(
-        **_generation_context(db, interview, current_user),
-        question_number=1,
-        previous_qa_context=[],
-    )
+    if interview.plan:
+        step = interview.plan[0]
+        q_data = await video_interview.generate_step_question(
+            step, _video_context(db, interview, current_user), [], seed=secrets.randbelow(1000),
+        )
+        extra = {"kind": step["kind"], "step_index": 0, "details": q_data.get("details")}
+    else:
+        q_data = await gemini_service.generate_question(
+            **_generation_context(db, interview, current_user),
+            question_number=1,
+            previous_qa_context=[],
+        )
+        extra = {}
 
     db.add(interview)
     db.flush()
-    question = models.Question(
-        interview_id=interview.id,
-        question_text=q_data["question_text"],
-        difficulty=q_data.get("difficulty", "Medium"),
-        expected_concepts=q_data.get("expected_concepts", []),
-    )
+    question = _new_question(interview, q_data, **extra)
     db.add(question)
     db.commit()
     db.refresh(question)
 
     return {
         "interview_id": interview.id,
+        "mode": interview.mode,
+        "plan": interview.plan,
         "question": schemas.QuestionResponse.model_validate(question),
-        "total_questions": QUESTIONS_PER_INTERVIEW,
+        "total_questions": _total_questions(interview),
         "jd_skills": jd_skills,
     }
 
@@ -681,9 +817,17 @@ async def get_interview_history(
     current_user: models.User = Depends(auth_utils.get_current_user)
 ):
     interviews = db.query(models.Interview).filter(models.Interview.user_id == current_user.id).order_by(models.Interview.started_at.desc(), models.Interview.id.desc()).all()
-    return [
-        {
+    history = []
+    for i in interviews:
+        answers = _sorted_answers(i)
+        if _is_video(i):
+            step_scores = _step_scores(_answer_pairs(answers))
+            answered, scores = len(step_scores), list(step_scores.values())
+        else:
+            answered, scores = len(answers), [a.score for a in answers]
+        history.append({
             "id": i.id,
+            "mode": i.mode or "text",
             "role_id": i.role_id,
             "role_name": i.role.name if i.role else "Target Role",
             "company_id": i.company_id,
@@ -691,14 +835,13 @@ async def get_interview_history(
             "seniority": i.seniority,
             "status": i.status,
             "overall_score": i.overall_score,
-            "questions_answered": len(i.answers),
-            "total_questions": QUESTIONS_PER_INTERVIEW,
-            "scores": [a.score for a in sorted(i.answers, key=lambda a: a.id)],
+            "questions_answered": answered,
+            "total_questions": _total_questions(i),
+            "scores": scores,
             "started_at": i.started_at,
             "completed_at": i.completed_at,
-        }
-        for i in interviews
-    ]
+        })
+    return history
 
 @app.post("/interviews/{interview_id}/resume")
 async def resume_interview(
@@ -714,37 +857,58 @@ async def resume_interview(
     answered_ids = {a.question_id for a in interview.answers}
     questions = sorted(interview.questions, key=lambda q: q.id)
     current = next((q for q in questions if q.id not in answered_ids), None)
+    answers = _sorted_answers(interview)
     if current is None:
-        answers = sorted(interview.answers, key=lambda a: a.id)
-        q_data = await gemini_service.generate_question(
-            **_generation_context(db, interview, current_user),
-            question_number=len(answers) + 1,
-            previous_qa_context=_previous_context(answers),
-        )
-        current = models.Question(
-            interview_id=interview.id,
-            question_text=q_data["question_text"],
-            difficulty=q_data.get("difficulty", "Medium"),
-            expected_concepts=q_data.get("expected_concepts", []),
-        )
+        if _is_video(interview):
+            next_index = max((q.step_index for q in questions if q.step_index is not None), default=-1) + 1
+            if next_index >= len(interview.plan or []):
+                # Every step was answered but the interview was never closed; close it now.
+                recs = await _completion_recommendations(
+                    db, interview, current_user, [a.rubric_json or {} for a in answers], [a.delivery for a in answers],
+                )
+                _mark_completed(db, interview, current_user, _overall_score(interview, _answer_pairs(answers)), recs)
+                db.commit()
+                raise HTTPException(status_code=409, detail="This interview is already completed. Open its results instead.")
+            current = await _step_question(db, interview, current_user, next_index, _video_history(answers))
+        else:
+            q_data = await gemini_service.generate_question(
+                **_generation_context(db, interview, current_user),
+                question_number=len(answers) + 1,
+                previous_qa_context=_previous_context(answers),
+            )
+            current = _new_question(interview, q_data)
         db.add(current)
         db.commit()
         db.refresh(current)
         db.refresh(interview)
-    last_answer = max(interview.answers, key=lambda a: a.id) if interview.answers else None
-    return {
+        answers = _sorted_answers(interview)
+    last_answer = answers[-1] if answers else None
+    payload = {
         "id": interview.id,
+        "mode": interview.mode or "text",
         "status": interview.status,
         "role_id": interview.role_id,
         "role_name": interview.role.name if interview.role else None,
         "company_id": interview.company_id,
         "company_name": interview.company.name if interview.company else None,
         "seniority": interview.seniority or "Mid",
-        "questions_answered": len(interview.answers),
-        "total_questions": QUESTIONS_PER_INTERVIEW,
+        "questions_answered": len(answers),
+        "total_questions": _total_questions(interview),
         "current_question": schemas.QuestionResponse.model_validate(current) if current else None,
         "last_evaluation": last_answer.rubric_json if last_answer else None,
     }
+    if _is_video(interview):
+        step_scores = _step_scores(_answer_pairs(answers))
+        parent = db.get(models.Question, current.parent_id) if current and current.parent_id else None
+        payload.update({
+            "plan": interview.plan,
+            "questions_answered": len(step_scores),
+            "follow_ups_used": sum(1 for q in questions if q.parent_id),
+            "parent_question": parent.question_text if parent else None,
+            "step_scores": step_scores,
+            "elapsed_seconds": round(sum((a.delivery or {}).get("duration") or 0 for a in answers)),
+        })
+    return payload
 
 @app.get("/interviews/{interview_id}/current-question", response_model=schemas.QuestionResponse)
 async def get_current_question(
@@ -768,6 +932,8 @@ async def submit_answer(
     interview = _get_owned_interview(db, interview_id, current_user)
     if interview.status == "completed":
         raise HTTPException(status_code=409, detail="This interview is already completed")
+    if _is_video(interview):
+        raise HTTPException(status_code=409, detail="This is a video interview. Answer it in the interview room.")
 
     question = db.query(models.Question).filter(
         models.Question.id == data.question_id, models.Question.interview_id == interview.id
@@ -798,36 +964,12 @@ async def submit_answer(
     )
 
     if answered >= QUESTIONS_PER_INTERVIEW:
-        scores = [a.score for a in previous_answers if a.score is not None] + [eval_data["score"]]
-        overall = round(sum(scores) / len(scores), 1)
-
-        weak_topics: List[str] = []
-        for rubric in [a.rubric_json or {} for a in previous_answers] + [eval_data]:
-            for concept in rubric.get("missing_concepts", []):
-                if concept not in weak_topics:
-                    weak_topics.append(concept)
-        context = _generation_context(db, interview, current_user)
-        requirements = merge_jd_requirements(_role_requirements(interview.role), interview.jd_skills or [])
-        missing_skills = [
-            name for name, weight in unmet_requirements(requirements, context["candidate_skills"])
-            if weight >= HIGH_IMPORTANCE
-        ]
-        recs = await gemini_service.generate_recommendations(
-            missing_skills=missing_skills[:5], weak_topics=weak_topics[:8], role_name=context["role_name"]
+        overall = _overall_score(interview, [(None, a.score) for a in previous_answers] + [(None, eval_data["score"])])
+        recs = await _completion_recommendations(
+            db, interview, current_user, [a.rubric_json or {} for a in previous_answers] + [eval_data], [],
         )
-
         db.add(answer)
-        interview.status = "completed"
-        interview.overall_score = overall
-        interview.completed_at = models.utcnow()
-        for r in recs:
-            db.add(models.Recommendation(
-                user_id=current_user.id,
-                interview_id=interview.id,
-                topic=r["topic"],
-                priority=r["priority"],
-                reason=r["reason"],
-            ))
+        _mark_completed(db, interview, current_user, overall, recs)
         db.commit()
         return {
             "status": "completed",
@@ -854,12 +996,7 @@ async def submit_answer(
     )
 
     db.add(answer)
-    next_q = models.Question(
-        interview_id=interview.id,
-        question_text=next_q_data["question_text"],
-        difficulty=next_q_data.get("difficulty", "Medium"),
-        expected_concepts=next_q_data.get("expected_concepts", [])
-    )
+    next_q = _new_question(interview, next_q_data)
     db.add(next_q)
     db.commit()
     db.refresh(next_q)
@@ -872,6 +1009,242 @@ async def submit_answer(
         "total_questions": QUESTIONS_PER_INTERVIEW,
     }
 
+
+def _json_form(value: str, limit: int, label: str) -> Any:
+    if not value:
+        return None
+    if len(value) > limit:
+        raise HTTPException(status_code=413, detail=f"The {label} data is too large.")
+    try:
+        return json.loads(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"The {label} data is not valid JSON.")
+
+
+@app.post("/interviews/{interview_id}/video-answers")
+async def submit_video_answer(
+    interview_id: int,
+    question_id: int = Form(...),
+    text: str = Form(""),
+    text_source: str = Form("typed"),
+    caption_segments: str = Form(""),
+    code: str = Form(""),
+    language: str = Form(""),
+    delivery: str = Form(""),
+    audio: Optional[UploadFile] = File(None),
+    diagram: Optional[UploadFile] = File(None),
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """One answer in a video interview: the spoken answer's audio (transcribed by the AI), typed text or
+    live captions, code for a coding step, and the whiteboard image for a design step."""
+    interview = _get_owned_interview(db, interview_id, current_user)
+    if interview.status == "completed":
+        raise HTTPException(status_code=409, detail="This interview is already completed")
+    if not _is_video(interview) or not interview.plan:
+        raise HTTPException(status_code=409, detail="This is a text interview. Answer it in the Workspace.")
+
+    question = db.query(models.Question).filter(
+        models.Question.id == question_id, models.Question.interview_id == interview.id
+    ).first()
+    if not question or question.step_index is None or question.step_index >= len(interview.plan):
+        raise HTTPException(status_code=404, detail="Question not found in this interview")
+    if db.query(models.Answer).filter(models.Answer.question_id == question.id).first():
+        raise HTTPException(status_code=409, detail="This question has already been answered")
+
+    step = interview.plan[question.step_index]
+    text = text.strip()
+    if len(text) > 8000:
+        raise HTTPException(status_code=413, detail="Your typed answer is too long. Keep it under 8,000 characters.")
+    if len(code) > 20000:
+        raise HTTPException(status_code=413, detail="Your code is too long. Keep it under 20,000 characters.")
+    if step["kind"] == "code" and language not in (step.get("languages") or []):
+        raise HTTPException(status_code=400, detail="Choose one of the languages offered for this problem.")
+    source = text_source if text_source in ("captions", "typed") else "typed"
+    client_delivery = _json_form(delivery, 20_000, "delivery") or {}
+    captions = _json_form(caption_segments, 60_000, "caption") or []
+
+    audio_bytes, audio_mime = None, ""
+    if audio is not None:
+        mime = (audio.content_type or "").split(";")[0].strip().lower()
+        if mime not in ANSWER_AUDIO_TYPES:
+            raise HTTPException(status_code=415, detail="Unsupported audio format. Record the answer again.")
+        audio_bytes = await audio.read(settings.max_answer_audio_bytes + 1)
+        if len(audio_bytes) > settings.max_answer_audio_bytes:
+            raise HTTPException(status_code=413, detail="This recording is too long. Keep answers under about 8 minutes.")
+        audio_bytes, audio_mime = (audio_bytes or None), ANSWER_AUDIO_TYPES[mime]
+
+    image_bytes = None
+    if diagram is not None and step["kind"] == "design":
+        image_bytes = await diagram.read(MAX_DIAGRAM_BYTES + 1)
+        if len(image_bytes) > MAX_DIAGRAM_BYTES:
+            raise HTTPException(status_code=413, detail="The whiteboard image is too large.")
+        if not image_bytes.startswith(PNG_SIGNATURE):
+            raise HTTPException(status_code=415, detail="The whiteboard image must be a PNG.")
+
+    if step["kind"] == "spoken" and not (audio_bytes or text):
+        raise HTTPException(status_code=400, detail="Record or type an answer before submitting.")
+    if step["kind"] == "code" and not code.strip():
+        raise HTTPException(status_code=400, detail="Write some code before submitting.")
+    if step["kind"] == "design" and not (image_bytes or text or audio_bytes):
+        raise HTTPException(status_code=400, detail="Draw your design or explain it before submitting.")
+
+    answers = _sorted_answers(interview)
+    questions = interview.questions
+    follow_ups_used = sum(1 for q in questions if q.parent_id)
+    allow_follow_up = bool(step.get("follow_up")) and question.parent_id is None and follow_ups_used < MAX_FOLLOW_UPS
+    parent = db.get(models.Question, question.parent_id) if question.parent_id else None
+    duration = float(client_delivery.get("duration") or 0) if isinstance(client_delivery, dict) else 0.0
+
+    # All AI calls happen before any writes so no database lock is held while waiting.
+    eval_data = await video_interview.evaluate_answer(
+        step, question, parent.question_text if parent else None, _video_context(db, interview, current_user),
+        audio=audio_bytes, audio_mime=audio_mime, text=text, text_source=source, caption_segments=captions,
+        code=code, language=language, image=image_bytes, allow_follow_up=allow_follow_up, duration=duration,
+    )
+    transcript = eval_data.get("transcript") or ""
+    if step["kind"] == "spoken" and not transcript:
+        if audio_bytes and eval_data.get("evaluator") == "fallback":
+            detail = ("The AI that transcribes answers is busy right now, and live captions weren't available. "
+                      "Type your answer, or try again in a moment.")
+        else:
+            detail = "We couldn't hear an answer in that recording. Check your microphone and try again, or type your answer."
+        raise HTTPException(status_code=422, detail=detail)
+    follow_up_text = eval_data.pop("follow_up", None)
+    segments = eval_data.pop("segments", [])
+    eval_data.pop("transcript", None)
+    source = eval_data.pop("transcript_source", source)
+    # Pace and filler words come only from what was said (an AI transcript or live captions), never typed notes.
+    delivery_record = delivery_service.build_delivery(client_delivery, transcript, spoken=source in ("ai", "captions"))
+
+    pairs = _answer_pairs(answers) + [(question.step_index, eval_data["score"])]
+    wants_follow_up = allow_follow_up and follow_up_text and 3.0 <= eval_data["score"] < 8.5
+    next_index = question.step_index + 1
+    next_q = None
+    recs: List[Dict[str, Any]] = []
+    history = _video_history(answers) + [{"question": question.question_text, "answer_summary": (transcript or code)[:250]}]
+    if wants_follow_up:
+        next_q = _new_question(
+            interview, {"question_text": follow_up_text, "difficulty": question.difficulty,
+                        "expected_concepts": (eval_data.get("missing_concepts") or question.expected_concepts or [])[:3]},
+            kind="spoken", step_index=question.step_index, parent_id=question.id,
+        )
+    elif next_index < len(interview.plan):
+        next_q = await _step_question(db, interview, current_user, next_index, history)
+    else:
+        recs = await _completion_recommendations(
+            db, interview, current_user, [a.rubric_json or {} for a in answers] + [eval_data],
+            [a.delivery for a in answers] + [delivery_record],
+        )
+
+    answer = models.Answer(
+        interview_id=interview.id,
+        question_id=question.id,
+        answer_text=transcript,
+        score=eval_data["score"],
+        rubric_json=eval_data,
+        feedback=eval_data["feedback"],
+        transcript_source=source,
+        segments=segments,
+        code=code or None,
+        code_language=language or None,
+        diagram_image=f"data:image/png;base64,{base64.b64encode(image_bytes).decode()}" if image_bytes else None,
+        delivery=delivery_record,
+    )
+    db.add(answer)
+    completed = next_q is None
+    overall = _overall_score(interview, pairs)
+    if completed:
+        _mark_completed(db, interview, current_user, overall, recs)
+    else:
+        db.add(next_q)
+    db.commit()
+    if next_q is not None:
+        db.refresh(next_q)
+
+    step_scores = _step_scores(pairs)
+    return {
+        "status": "completed" if completed else "in_progress",
+        "evaluation": {**eval_data, "transcript": transcript, "segments": segments, "transcript_source": source},
+        "delivery": delivery_record,
+        "next_question": schemas.QuestionResponse.model_validate(next_q) if next_q else None,
+        "is_follow_up": bool(next_q is not None and next_q.parent_id),
+        "step_score": step_scores.get(question.step_index),
+        "questions_answered": len(step_scores),
+        "total_questions": len(interview.plan),
+        "overall_score": overall if completed else None,
+    }
+
+
+@app.post("/interviews/{interview_id}/finish")
+async def finish_interview(
+    interview_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """Ends an interview early. Answered questions are scored; the rest count as skipped."""
+    interview = _get_owned_interview(db, interview_id, current_user)
+    if interview.status == "completed":
+        raise HTTPException(status_code=409, detail="This interview is already completed")
+    answers = _sorted_answers(interview)
+    recs = await _completion_recommendations(
+        db, interview, current_user, [a.rubric_json or {} for a in answers], [a.delivery for a in answers],
+    )
+    overall = _overall_score(interview, _answer_pairs(answers))
+    _mark_completed(db, interview, current_user, overall, recs)
+    db.commit()
+    answered = len(_step_scores(_answer_pairs(answers))) if _is_video(interview) else len(answers)
+    return {
+        "status": "completed",
+        "overall_score": overall,
+        "questions_answered": answered,
+        "total_questions": _total_questions(interview),
+    }
+
+
+def _video_steps(interview: models.Interview, answers: List[models.Answer]) -> List[Dict[str, Any]]:
+    by_question = {a.question_id: a for a in answers}
+    step_scores = _step_scores(_answer_pairs(answers))
+    steps = []
+    for step in interview.plan or []:
+        questions = sorted((q for q in interview.questions if q.step_index == step["index"]), key=lambda q: q.id)
+        items = []
+        for q in questions:
+            a = by_question.get(q.id)
+            if a is None and q.parent_id:
+                continue  # a follow-up that was never answered
+            items.append({
+                "id": q.id,
+                "question": q.question_text,
+                "is_follow_up": bool(q.parent_id),
+                "details": q.details,
+                "expected_concepts": q.expected_concepts or [],
+                "answer": None if a is None else {
+                    "id": a.id,
+                    "text": a.answer_text,
+                    "transcript_source": a.transcript_source,
+                    "segments": a.segments or [],
+                    "delivery": a.delivery,
+                    "code": a.code,
+                    "language": a.code_language,
+                    "diagram_image": a.diagram_image,
+                    "score": a.score,
+                    "rubric": a.rubric_json or {},
+                    "feedback": a.feedback,
+                    "evaluator": (a.rubric_json or {}).get("evaluator", "ai"),
+                },
+            })
+        answered = any(item["answer"] for item in items)
+        steps.append({
+            **step,
+            "status": "answered" if answered else "skipped",
+            "score": step_scores.get(step["index"]),
+            "duration": round(sum(((item["answer"] or {}).get("delivery") or {}).get("duration") or 0 for item in items)),
+            "questions": items,
+        })
+    return steps
+
+
 @app.get("/interviews/{interview_id}/results")
 async def get_interview_results(
     interview_id: int,
@@ -879,7 +1252,7 @@ async def get_interview_results(
     current_user: models.User = Depends(auth_utils.get_current_user)
 ):
     interview = _get_owned_interview(db, interview_id, current_user)
-    answers = db.query(models.Answer).filter(models.Answer.interview_id == interview.id).order_by(models.Answer.id).all()
+    answers = _sorted_answers(interview)
 
     evaluations = []
     for a in answers:
@@ -898,8 +1271,9 @@ async def get_interview_results(
         })
 
     recommendations = sorted(interview.recommendations, key=lambda r: r.id)
-    return {
+    results = {
         "interview_id": interview.id,
+        "mode": interview.mode or "text",
         "status": interview.status,
         "overall_score": interview.overall_score,
         "role_name": interview.role.name if interview.role else None,
@@ -908,11 +1282,21 @@ async def get_interview_results(
         "started_at": interview.started_at,
         "completed_at": interview.completed_at,
         "questions_answered": len(answers),
-        "total_questions": QUESTIONS_PER_INTERVIEW,
+        "total_questions": _total_questions(interview),
         "used_fallback_evaluator": any(e["evaluator"] == "fallback" for e in evaluations),
         "evaluations": evaluations,
         "recommendations": [schemas.RecommendationResponse.model_validate(r) for r in recommendations],
     }
+    if _is_video(interview):
+        steps = _video_steps(interview, answers)
+        results.update({
+            "plan": interview.plan,
+            "steps": steps,
+            "questions_answered": sum(1 for s in steps if s["status"] == "answered"),
+            "follow_ups": sum(1 for s in steps for q in s["questions"] if q["is_follow_up"]),
+            "delivery": delivery_service.summarize(a.delivery for a in answers),
+        })
+    return results
 
 # --- RECOMMENDATIONS ENDPOINT (SRS FR-15 & Section 10.6) ---
 

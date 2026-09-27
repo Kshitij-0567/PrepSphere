@@ -68,24 +68,41 @@ def _profile_items(items: Any, title_key: str, parts: List[str], limit: int) -> 
 
 
 def _interview_questions(interview: models.Interview) -> Dict[str, Any]:
+    """One cell per question (text interviews) or per step (video interviews) for the score strip."""
     questions = sorted(interview.questions, key=lambda q: q.id)
     answers = {a.question_id: a for a in interview.answers}
+    live = interview.status != "completed"
     cells: List[Dict[str, Any]] = []
     current_index = None
-    for index, question in enumerate(questions[:QUESTIONS_PER_INTERVIEW]):
-        answer = answers.get(question.id)
-        if answer is None and current_index is None and interview.status != "completed":
-            current_index = index
-        rubric = (answer.rubric_json or {}) if answer else {}
-        cells.append({
-            "score": answer.score if answer else None,
-            "topic": _excerpt(question.question_text),
-            "approx": rubric.get("evaluator") == "fallback",
-        })
-    while len(cells) < QUESTIONS_PER_INTERVIEW:
-        cells.append({"score": None, "topic": None, "approx": False})
+    if (interview.mode or "text") == "video":
+        for index, step in enumerate(interview.plan or []):
+            step_questions = [q for q in questions if q.step_index == step["index"]]
+            main = next((q for q in step_questions if not q.parent_id), None)
+            scored = [answers[q.id] for q in step_questions if q.id in answers and answers[q.id].score is not None]
+            if live and current_index is None and any(q.id not in answers for q in step_questions):
+                current_index = index
+            cells.append({
+                "score": round(sum(a.score for a in scored) / len(scored), 1) if scored else None,
+                "topic": _excerpt(main.question_text) if main else step.get("title"),
+                "approx": any((a.rubric_json or {}).get("evaluator") == "fallback" for a in scored),
+            })
+        total = len(cells)
+    else:
+        for index, question in enumerate(questions[:QUESTIONS_PER_INTERVIEW]):
+            answer = answers.get(question.id)
+            if answer is None and current_index is None and live:
+                current_index = index
+            rubric = (answer.rubric_json or {}) if answer else {}
+            cells.append({
+                "score": answer.score if answer else None,
+                "topic": _excerpt(question.question_text),
+                "approx": rubric.get("evaluator") == "fallback",
+            })
+        while len(cells) < QUESTIONS_PER_INTERVIEW:
+            cells.append({"score": None, "topic": None, "approx": False})
+        total = QUESTIONS_PER_INTERVIEW
     answered = sum(1 for c in cells if c["score"] is not None)
-    return {"questions": cells, "answered": answered, "current_index": current_index}
+    return {"questions": cells, "answered": answered, "current_index": current_index, "total": total}
 
 
 def build_profile_summary(db: Session, user: models.User) -> Dict[str, Any]:
@@ -278,7 +295,7 @@ def build_profile_summary(db: Session, user: models.User) -> Dict[str, Any]:
             "date": _iso(interview.started_at),
             "status": interview.status,
             "overall": interview.overall_score,
-            "total": QUESTIONS_PER_INTERVIEW,
+            "mode": interview.mode or "text",
             **cells,
         })
     summary["recent_interviews"] = recent
@@ -293,7 +310,8 @@ def build_profile_summary(db: Session, user: models.User) -> Dict[str, Any]:
                 "company": interview.company.name if interview.company else None,
                 "seniority": interview.seniority or "Mid",
                 "answered": cells["answered"],
-                "total": QUESTIONS_PER_INTERVIEW,
+                "total": cells["total"],
+                "mode": interview.mode or "text",
                 "question": cells["questions"][cells["current_index"]]["topic"],
                 "started_at": _iso(interview.started_at),
             }

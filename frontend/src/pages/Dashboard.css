@@ -994,6 +994,29 @@
   border-color: rgba(99, 102, 241, 0.3);
 }
 
+.popular-chip.search-more {
+  border-style: dashed;
+  border-color: rgba(129, 140, 248, 0.5);
+  background: rgba(99, 102, 241, 0.08);
+  color: var(--dash-glow);
+}
+
+.popular-chip.search-more:hover {
+  background: rgba(99, 102, 241, 0.18);
+  color: #ffffff;
+}
+
+.company-search-box.is-highlighted {
+  border-color: var(--dash-accent);
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.35), 0 0 28px rgba(99, 102, 241, 0.35);
+}
+
+.company-search-hint {
+  padding: 14px 16px;
+  font-size: 13px;
+  color: var(--dash-muted);
+}
+
 .popular-chip.active {
   background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(59, 130, 246, 0.25));
   color: #ffffff;
@@ -2241,3 +2264,22 @@
   text-align: center;
   color: var(--dash-muted);
 }
+
+/* ---------- Interview format choice (skill-gap step) ---------- */
+.interview-format { margin-top: 32px; display: grid; gap: 16px; }
+.interview-format-title { font-size: 17px; font-weight: 700; margin: 0; color: var(--dash-text); }
+.interview-format-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; max-width: 860px; }
+.interview-format-card {
+  display: flex; gap: 14px; align-items: flex-start; padding: 18px; text-align: left; cursor: pointer;
+  color: var(--dash-text); font: inherit; transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+.interview-format-card:hover { border-color: rgba(129, 140, 248, 0.45); transform: translateY(-1px); }
+.interview-format-card.selected { border-color: rgba(129, 140, 248, 0.75); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25), 0 8px 32px rgba(0, 0, 0, 0.35); }
+.interview-format-card:focus-visible { outline: 2px solid var(--dash-glow); outline-offset: 2px; }
+.interview-format-icon { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; flex: none; background: rgba(99, 102, 241, 0.14); color: var(--dash-glow); }
+.interview-format-card.selected .interview-format-icon { background: var(--dash-accent); color: #fff; }
+.interview-format-body { display: grid; gap: 4px; }
+.interview-format-body strong { font-size: 15px; display: flex; align-items: center; gap: 8px; }
+.interview-format-badge { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 2px 7px; border-radius: 99px; background: rgba(16, 185, 129, 0.15); color: #34d399; }
+.interview-format-meta { font-size: 12.5px; color: var(--dash-glow); font-weight: 600; }
+.interview-format-text { font-size: 13px; color: var(--dash-muted); line-height: 1.5; }

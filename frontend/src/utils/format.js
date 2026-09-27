@@ -55,3 +55,8 @@ export function isValidLink(kind, value) {
     if (kind === 'linkedin') return LINKEDIN_PATTERN.test(text) || /^[A-Za-z0-9_-]{3,100}$/.test(text);
     return GITHUB_PATTERN.test(text);
 }
+
+/** Where to continue an unfinished interview: the video room, or the Workspace for text interviews. */
+export function resumePath(interview) {
+    return interview.mode === 'video' ? `/interviews/${interview.id}/live` : `/dashboard?resume=${interview.id}`;
+}

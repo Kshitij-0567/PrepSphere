@@ -78,6 +78,8 @@ class Settings:
         )
         self.demo_login_enabled: bool = _env_bool("DEMO_LOGIN_ENABLED", True)
         self.max_resume_bytes: int = _env_int("MAX_RESUME_MB", 10) * 1024 * 1024
+        # Video interviews upload each answer's audio (16 kHz WAV is about 2 MB a minute).
+        self.max_answer_audio_bytes: int = _env_int("MAX_ANSWER_AUDIO_MB", 16) * 1024 * 1024
         self.static_dir: Path = Path(os.getenv("STATIC_DIR") or (BACKEND_DIR / "static"))
         self.run_migrations_on_startup: bool = _env_bool("RUN_MIGRATIONS_ON_STARTUP", True)
 

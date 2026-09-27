@@ -16,6 +16,7 @@ const CompaniesPage = lazy(() => import('./pages/CompaniesPage'));
 const SkillGapsPage = lazy(() => import('./pages/SkillGapsPage'));
 const StudyPlanPage = lazy(() => import('./pages/StudyPlanPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const VideoInterviewPage = lazy(() => import('./pages/interview/VideoInterviewPage'));
 
 const PageLoader = () => (
   <div role="status" aria-label="Loading" style={{ minHeight: '60vh', display: 'grid', placeItems: 'center', color: '#6f7b98', fontSize: 14 }}>
@@ -42,6 +43,8 @@ function App() {
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        {/* The video interview room is full screen, outside the sidebar layout */}
+        <Route path="/interviews/:id/live" element={<PrivateRoute><VideoInterviewPage /></PrivateRoute>} />
         {/* Signed-in pages share the sidebar layout */}
         <Route element={<PrivateRoute><AppLayout /></PrivateRoute>}>
           <Route path="/profile" element={<ProfilePage />} />

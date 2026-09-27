@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { ArrowRight, Award, ClipboardCheck, FileText } from 'lucide-react';
+import { ArrowRight, Award, FileText, Keyboard, Video } from 'lucide-react';
 
 const FILTERS = [
     { key: 'All', label: 'All' },
@@ -60,8 +60,60 @@ const ResumeInsights = ({ quality }) => {
     );
 };
 
-const SkillGapStep = ({ skillGapData, quality, jdSkillCount, loading, onStartInterview }) => {
+const KIND_WORDS = { spoken: 'spoken', code: 'coding', design: 'whiteboard' };
+
+// "Spoken, coding and whiteboard steps" for the kinds a plan uses.
+function planKinds(plan) {
+    const kinds = [...new Set(plan.map(s => KIND_WORDS[s.kind]))];
+    const words = kinds.length > 1 ? `${kinds.slice(0, -1).join(', ')} and ${kinds[kinds.length - 1]}` : kinds[0];
+    return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+const FormatChooser = ({ format, onFormat, videoPlan, loading, onStart }) => {
+    const options = [
+        {
+            key: 'text', icon: Keyboard, title: 'Text interview', meta: '5 questions · about 15 min',
+            text: 'Type your answers and get rubric feedback after each one.',
+        },
+        {
+            key: 'video', icon: Video, title: 'Video interview', badge: 'New',
+            meta: videoPlan ? `${videoPlan.plan.length} steps · about ${videoPlan.minutes} min` : 'Camera and microphone',
+            text: videoPlan
+                ? `${planKinds(videoPlan.plan)} steps. The interviewer speaks each question and may ask a follow-up; you get a replay and delivery feedback.`
+                : 'The interviewer speaks each question and may ask a follow-up; you get a replay and delivery feedback.',
+        },
+    ];
+    return (
+        <div className="interview-format">
+            <h3 className="interview-format-title">How do you want to practise?</h3>
+            <div className="interview-format-grid" role="radiogroup" aria-label="Interview format">
+                {options.map(o => {
+                    const Icon = o.icon;
+                    return (
+                        <button key={o.key} type="button" role="radio" aria-checked={format === o.key}
+                            className={`interview-format-card dash-glass ${format === o.key ? 'selected' : ''}`} onClick={() => onFormat(o.key)}>
+                            <span className="interview-format-icon"><Icon size={20} aria-hidden="true" /></span>
+                            <span className="interview-format-body">
+                                <strong>{o.title}{o.badge && <span className="interview-format-badge">{o.badge}</span>}</strong>
+                                <span className="interview-format-meta">{o.meta}</span>
+                                <span className="interview-format-text">{o.text}</span>
+                            </span>
+                        </button>
+                    );
+                })}
+            </div>
+            <button onClick={() => onStart(format)} disabled={loading} className="btn-continue-primary" style={{ maxWidth: '340px' }}>
+                {format === 'video' ? <Video size={18} /> : <Keyboard size={18} />}
+                {loading ? (format === 'video' ? 'Preparing your interview…' : 'Preparing your first question…') : format === 'video' ? 'Set up video interview' : 'Start text interview'}
+                <ArrowRight size={18} />
+            </button>
+        </div>
+    );
+};
+
+const SkillGapStep = ({ skillGapData, quality, jdSkillCount, loading, onStartInterview, videoPlan }) => {
     const [activeSkillFilter, setActiveSkillFilter] = useState('All');
+    const [format, setFormat] = useState('video');
     const details = Object.fromEntries((skillGapData.skill_details || []).map(d => [d.name, d]));
     const score = skillGapData.readiness_score;
 
@@ -139,17 +191,7 @@ const SkillGapStep = ({ skillGapData, quality, jdSkillCount, loading, onStartInt
                 })}
             </div>
 
-            <div style={{ marginTop: '32px' }}>
-                <button
-                    onClick={onStartInterview}
-                    disabled={loading}
-                    className="btn-continue-primary"
-                    style={{ maxWidth: '340px' }}
-                >
-                    <ClipboardCheck size={18} />
-                    {loading ? "Preparing your first question..." : "Start Text Mock Interview"} <ArrowRight size={18} />
-                </button>
-            </div>
+            <FormatChooser format={format} onFormat={setFormat} videoPlan={videoPlan} loading={loading} onStart={onStartInterview} />
         </motion.div>
     );
 };

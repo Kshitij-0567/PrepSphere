@@ -155,6 +155,7 @@ class InterviewCreate(BaseModel):
     company_id: Optional[int] = None
     seniority: Seniority = "Mid"
     job_description: Optional[str] = Field(default=None, max_length=10000)
+    mode: Literal["text", "video"] = "text"
 
 class AnswerSubmit(BaseModel):
     question_id: int
@@ -184,6 +185,10 @@ class QuestionResponse(BaseModel):
     interview_id: int
     question_text: str
     difficulty: Optional[str] = "Medium"
+    kind: str = "spoken"                       # spoken, code, design (video interviews)
+    step_index: Optional[int] = None
+    parent_id: Optional[int] = None            # set on follow-up questions
+    details: Optional[Dict[str, Any]] = None   # coding problem or design brief
 
 class RecommendationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

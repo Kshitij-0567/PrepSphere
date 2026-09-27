@@ -7,7 +7,11 @@ const FILTERS = [
     { key: 'all', label: 'All' },
     { key: 'in_progress', label: 'In progress' },
     { key: 'completed', label: 'Completed' },
+    { key: 'video', label: 'Video' },
 ];
+
+const matches = (item, key) => key === 'all'
+    || (key === 'video' ? item.mode === 'video' : key === 'completed' ? item.status === 'completed' : item.status !== 'completed');
 
 // Adapts a history entry to the shape InterviewRow expects.
 function toRow(item) {
@@ -20,6 +24,7 @@ function toRow(item) {
     const live = item.status !== 'completed';
     return {
         id: item.id,
+        mode: item.mode || 'text',
         role: item.role_name,
         company: item.company_name,
         seniority: item.seniority || 'Mid',
@@ -47,8 +52,8 @@ const InterviewsPage = () => {
         return () => { cancelled = true; };
     }, []);
 
-    const shown = (items || []).filter(i => filter === 'all' || (filter === 'completed' ? i.status === 'completed' : i.status !== 'completed'));
-    const count = key => (items || []).filter(i => key === 'all' || (key === 'completed' ? i.status === 'completed' : i.status !== 'completed')).length;
+    const shown = (items || []).filter(i => matches(i, filter));
+    const count = key => (items || []).filter(i => matches(i, key)).length;
 
     return (
         <div className="ps-page">

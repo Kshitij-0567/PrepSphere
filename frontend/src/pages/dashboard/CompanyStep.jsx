@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
     ArrowRight, Award, Briefcase, Building2, CheckCircle2, Code, ExternalLink, Globe, Layers,
@@ -12,6 +12,23 @@ const QUICK_PICKS = ['Google', 'Amazon', 'Meta', 'Microsoft', 'Apple', 'Netflix'
 const CompanyStep = ({ companies, selectedCompany, onSelectCompany, selectedRole, seniorityLevel, onContinue }) => {
     const [companySearchQuery, setCompanySearchQuery] = useState('');
     const [isSearchFocused, setIsSearchFocused] = useState(false);
+    const [highlightSearch, setHighlightSearch] = useState(false);
+    const searchInputRef = useRef(null);
+    const highlightTimer = useRef(null);
+
+    useEffect(() => () => clearTimeout(highlightTimer.current), []);
+
+    // "Search more companies": bring the search box into view and draw attention to it.
+    const focusSearch = () => {
+        const input = searchInputRef.current;
+        if (!input) return;
+        input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        input.focus({ preventScroll: true });
+        setIsSearchFocused(true);
+        setHighlightSearch(true);
+        clearTimeout(highlightTimer.current);
+        highlightTimer.current = setTimeout(() => setHighlightSearch(false), 1600);
+    };
 
     const q = companySearchQuery.toLowerCase();
     const filteredCompanies = companies.filter(c => !q ||
@@ -21,6 +38,11 @@ const CompanyStep = ({ companies, selectedCompany, onSelectCompany, selectedRole
         c.headquarters?.toLowerCase().includes(q) ||
         c.interview_focus?.some(f => f.toLowerCase().includes(q)) ||
         c.common_topics?.some(t => t.toLowerCase().includes(q)));
+
+    const quickPickIds = new Set(
+        QUICK_PICKS.map(name => companies.find(c => c.name.toLowerCase() === name.toLowerCase())?.id).filter(Boolean)
+    );
+    const moreCount = companies.length - quickPickIds.size;
 
     const choose = (company) => {
         onSelectCompany(company);
@@ -39,18 +61,23 @@ const CompanyStep = ({ companies, selectedCompany, onSelectCompany, selectedRole
 
             {/* Search-First Typeahead Bar */}
             <div className="company-search-wrapper">
-                <div className="company-search-box">
+                <div className={`company-search-box ${highlightSearch ? 'is-highlighted' : ''}`}>
                     <Search size={20} color="var(--dash-muted)" />
                     <input
+                        ref={searchInputRef}
                         type="text"
                         className="company-search-input"
-                        placeholder="Type any company name (e.g. Google, Amazon, Jane Street, OpenAI, Stripe, Swiggy)..."
+                        aria-label={`Search all ${companies.length} companies`}
+                        placeholder={`Search all ${companies.length} companies by name, industry or topic (e.g. Razorpay, Fintech, System Design)...`}
                         value={companySearchQuery}
                         onChange={(e) => {
                             setCompanySearchQuery(e.target.value);
                             setIsSearchFocused(true);
                         }}
                         onFocus={() => setIsSearchFocused(true)}
+                        // Delay so a click on a suggestion lands before the list closes.
+                        onBlur={() => setTimeout(() => setIsSearchFocused(false), 150)}
+                        onKeyDown={(e) => { if (e.key === 'Escape') { setIsSearchFocused(false); e.currentTarget.blur(); } }}
                     />
                     {companySearchQuery && (
                         <button
@@ -64,6 +91,14 @@ const CompanyStep = ({ companies, selectedCompany, onSelectCompany, selectedRole
                         </button>
                     )}
                 </div>
+
+                {isSearchFocused && companySearchQuery.trim().length === 0 && (
+                    <div className="company-typeahead-dropdown">
+                        <div className="company-search-hint">
+                            Type to search all {companies.length} companies by name, industry or interview topic.
+                        </div>
+                    </div>
+                )}
 
                 {/* Autocomplete Suggestions Dropdown */}
                 {isSearchFocused && companySearchQuery.trim().length > 0 && (
@@ -122,6 +157,19 @@ const CompanyStep = ({ companies, selectedCompany, onSelectCompany, selectedRole
                         </button>
                     );
                 })}
+                {/* A company picked through search also shows up here, so the choice stays visible. */}
+                {selectedCompany && !quickPickIds.has(selectedCompany.id) && (
+                    <button type="button" className="popular-chip active" onClick={() => choose(selectedCompany)}>
+                        <CompanyLogo company={selectedCompany} size={15} className="company-inline-logo" />
+                        {selectedCompany.name}
+                    </button>
+                )}
+                {moreCount > 0 && (
+                    <button type="button" className="popular-chip search-more" onClick={focusSearch}>
+                        <Search size={14} aria-hidden="true" />
+                        Search {moreCount} more companies
+                    </button>
+                )}
             </div>
 
             {/* Executive Company Intelligence Dossier */}

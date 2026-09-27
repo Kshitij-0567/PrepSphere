@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useLocation, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import api, { apiErrorMessage } from '../api/client';
 import ParticleCanvas from '../components/ParticleCanvas';
 import Stepper from './dashboard/Stepper';
@@ -16,6 +16,7 @@ const MAX_RESUME_MB = 10; // keep in sync with MAX_RESUME_MB on the backend
 
 const Dashboard = () => {
     const location = useLocation();
+    const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
     // Other pages can preselect a role or company: navigate('/dashboard', { state: { roleId, companyId } })
     const preselect = useRef(location.state || {});
@@ -58,6 +59,7 @@ const Dashboard = () => {
     const [totalQuestions, setTotalQuestions] = useState(5);
     const [lastEvaluation, setLastEvaluation] = useState(null);
     const [finalResults, setFinalResults] = useState(null);
+    const [videoPlan, setVideoPlan] = useState(null);
 
     // Initial data loads once. (Re-running on every step change used to reset the chosen
     // role to the first role and the chosen company back to the default.)
@@ -115,6 +117,10 @@ const Dashboard = () => {
         api.post(`/interviews/${resumeParam}/resume`)
             .then(res => {
                 const s = res.data;
+                if (s.mode === 'video') {
+                    navigate(`/interviews/${s.id}/live`, { replace: true });
+                    return;
+                }
                 companyChosen.current = true;
                 setSelectedRole(prev => (prev && prev.id === s.role_id && !prev.placeholder
                     ? prev
@@ -136,6 +142,17 @@ const Dashboard = () => {
         // roles/companies are read once to upgrade the placeholders when already loaded.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [resumeParam, setSearchParams]);
+
+    // The video format card shows the exact steps for this role and seniority.
+    const planRoleId = step === 'skill-gap' ? selectedRole?.id : null;
+    useEffect(() => {
+        if (!planRoleId) return undefined;
+        let cancelled = false;
+        api.get(`/roles/${planRoleId}/video-plan`, { params: { seniority: seniorityLevel } })
+            .then(res => { if (!cancelled) setVideoPlan(res.data); })
+            .catch(() => { if (!cancelled) setVideoPlan(null); });
+        return () => { cancelled = true; };
+    }, [planRoleId, seniorityLevel]);
 
     const refreshSavedResumes = async () => {
         try {
@@ -238,7 +255,7 @@ const Dashboard = () => {
     };
 
     // --- Mock interview (SRS FR-09 to FR-14) ---
-    const startInterview = async () => {
+    const startInterview = async (mode = 'text') => {
         if (!selectedRole) return;
         setLoading(true);
         setError('');
@@ -247,9 +264,14 @@ const Dashboard = () => {
                 role_id: selectedRole.id,
                 company_id: selectedCompany ? selectedCompany.id : null,
                 seniority: seniorityLevel,
+                mode,
             };
             if (jdAnalysis && jdText.trim()) payload.job_description = jdText;
             const res = await api.post('/interviews', payload);
+            if (mode === 'video') {
+                navigate(`/interviews/${res.data.interview_id}/live`);
+                return;
+            }
             setInterviewId(res.data.interview_id);
             setCurrentQuestion(res.data.question);
             setTotalQuestions(res.data.total_questions || 5);
@@ -375,6 +397,7 @@ const Dashboard = () => {
                         jdSkillCount={jdRequiredSkills.length}
                         loading={loading}
                         onStartInterview={startInterview}
+                        videoPlan={videoPlan}
                     />
                 ) : (
                     <div className="dash-empty-step dash-glass">

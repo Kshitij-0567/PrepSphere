@@ -112,8 +112,9 @@ class GeminiService:
     def available(self) -> bool:
         return self.client is not None
 
-    async def generate_json(self, prompt: str) -> Any:
-        """Asks Gemini for a JSON response, trying the fallback model if the primary one fails."""
+    async def generate_json(self, prompt: Any) -> Any:
+        """Asks Gemini for a JSON response, trying the fallback model if the primary one fails.
+        `prompt` is a string, or a list of parts (text plus audio or image bytes)."""
         if self.client is None:
             raise AIUnavailableError("Gemini API key is not configured")
 

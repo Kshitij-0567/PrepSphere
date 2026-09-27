@@ -8,8 +8,16 @@ PrepSphere helps engineering candidates find out how ready they are for a specif
 2. **Pick a target company** (350+ companies with interview focus areas, rounds and prep tips) or practise against a general standard.
 3. **Upload a resume** (PDF, DOCX or TXT). Skills are extracted with evidence, and the resume gets a completeness check.
 4. **See the skill gap**: every role requirement is marked strong, developing, minor gap or missing, with a readiness score weighted by importance.
-5. **Take a 5-question text mock interview.** Questions are generated from the role, company, seniority, resume and gaps; each answer is scored against a rubric.
-6. **Get results**: per-question feedback, which expected concepts you covered, and a prioritized study plan.
+5. **Take a mock interview**, either as text (5 typed answers) or as video. Questions are generated from the role, company, seniority, resume and gaps; each answer is scored against a rubric.
+   - The **video interview** runs a plan of spoken, coding and whiteboard steps chosen for the role family and seniority (no coding round for core engineering roles).
+   - The interviewer speaks each question in a browser voice, listens to the answer with live captions, and may ask up to two follow-ups.
+   - Coding happens in an editor; system design on an Excalidraw whiteboard that the AI reviews as an image.
+6. **Get results**:
+   - per-question feedback and which expected concepts you covered
+   - a prioritized study plan
+   - for video interviews: a replay of each answer, a transcript with filler words marked, line-by-line code review, and delivery feedback (speaking pace, filler words, long pauses and eye contact)
+
+Video recordings never leave the browser; they are kept in IndexedDB for the last 5 interviews. Each answer's audio is sent only to be transcribed and is not stored.
 
 AI features use Google Gemini. Without a `GEMINI_API_KEY` the app still works end to end with deterministic fallbacks, and those scores are clearly labelled *approximate* in the UI.
 
@@ -19,7 +27,7 @@ AI features use Google Gemini. Without a `GEMINI_API_KEY` the app still works en
 
 | Layer | Technology |
 | --- | --- |
-| Frontend | React 19, Vite, React Router, Framer Motion, Axios |
+| Frontend | React 19, Vite, React Router, Framer Motion, Axios; CodeMirror 6, Excalidraw and MediaPipe Face Landmarker (loaded only in the video interview room) |
 | Backend | FastAPI, SQLAlchemy 2, Alembic, Pydantic 2 |
 | Database | SQLite by default; PostgreSQL supported via `DATABASE_URL` |
 | AI | Google Gemini (`google-genai`, async, with timeouts and model fallback) |
@@ -74,6 +82,7 @@ Backend (`backend/.env`, see `backend/.env.example`):
 | `CORS_ORIGINS` | no | Comma-separated allowed frontend origins |
 | `DEMO_LOGIN_ENABLED` | no | "Try a demo" button; set `false` in production |
 | `MAX_RESUME_MB` | no | Upload size limit, default 10 |
+| `MAX_ANSWER_AUDIO_MB` | no | Size limit for one video-interview answer's audio, default 16 (about 8 minutes of 16 kHz WAV) |
 
 Frontend (`frontend/.env`): `VITE_API_URL`, `VITE_GOOGLE_CLIENT_ID`. Never put secrets in `VITE_` variables; they are embedded in the public bundle.
 
@@ -99,12 +108,18 @@ backend/
     skill_taxonomy.py        skill catalog, aliases, evidence extraction, role-requirement matching
     skill_gap.py             weighted readiness and strong/developing/gap statuses
     candidate_profile.py     the active resume and the skills derived from it
+    interview_plan.py        video interview step plans by role family and seniority
+    video_interview.py       video step questions, one-call transcription + scoring, follow-ups (+ fallbacks)
+    delivery.py              speaking pace, filler words, pauses and eye contact
   migrations/                Alembic migrations
   tests/
 frontend/src/
   api/                       Axios client (auth header, session expiry) and session helpers
   pages/Dashboard.jsx        workflow state; one component per step in pages/dashboard/
+  pages/interview/           video interview: setup check, interview room, results; lib/ has media, speech,
+                             recordings (IndexedDB), face tracking and the room controller
   pages/LandingPage.jsx, Login.jsx, Signup.jsx
+frontend/public/models/      MediaPipe face model, served from the site
 ```
 
 ## API overview
@@ -116,7 +131,8 @@ frontend/src/
 | `POST /resumes/upload`, `GET /resumes`, `POST /resumes/{id}/select`, `DELETE /resumes/{id}` | Resume library (one resume is active) |
 | `POST /jobs/analyze` | Extract requirements from a job description |
 | `GET /skill-gaps?role_id=&jd_skills=` | Skill gap for the active resume |
-| `POST /interviews`, `POST /interviews/{id}/answers`, `GET /interviews/{id}/results` | Mock interview |
+| `POST /interviews`, `POST /interviews/{id}/answers`, `GET /interviews/{id}/results` | Mock interview (`mode`: `text` or `video`) |
+| `GET /roles/{id}/video-plan`, `POST /interviews/{id}/video-answers`, `POST /interviews/{id}/finish`, `POST /interviews/{id}/resume` | Video interview plan, multipart answers (audio, code, whiteboard PNG), ending early, resuming |
 | `GET /interviews/history`, `GET /recommendations` | History |
 
 Interactive documentation is available at `http://127.0.0.1:8000/docs`.
