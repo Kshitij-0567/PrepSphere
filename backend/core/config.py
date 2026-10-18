@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 QUESTIONS_PER_INTERVIEW = 5
 SENIORITY_LEVELS = ("Junior", "Mid", "Senior")
+DEMO_EMAIL_DOMAIN = "demo.prepsphere.local" # throwaway demo accounts; left out of benchmarks and the showcase
 
 DEFAULT_CORS_ORIGINS = [
     "http://localhost:5173",

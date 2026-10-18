@@ -42,12 +42,14 @@ class GoogleLoginRequest(BaseModel):
     token: str
 
 class UserUpdate(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
+    """Only the fields that are sent change. An empty country removes it."""
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    country: Optional[str] = Field(default=None, max_length=2)
 
     @field_validator("name")
     @classmethod
-    def _not_blank(cls, value: str) -> str:
-        if not value.strip():
+    def _not_blank(cls, value: Optional[str]) -> str:
+        if value is None or not value.strip():
             raise ValueError("Name cannot be empty")
         return value.strip()
 
@@ -75,6 +77,7 @@ class UserProfile(BaseModel):
     id: int
     name: Optional[str]
     email: str
+    country: Optional[str] = None
     created_at: Optional[datetime] = None
 
 # --- ROLE & SKILL SCHEMAS ---
@@ -198,6 +201,22 @@ class RecommendationResponse(BaseModel):
     topic: Optional[str] = None
     priority: Optional[str] = "Medium"
     reason: Optional[str] = None
+
+# --- RESUME SHOWCASE SCHEMAS ---
+class ShowcaseOptions(BaseModel):
+    """What a published resume shows. Names of colleges and companies are hidden unless chosen."""
+    role_id: int
+    seniority: Seniority = "Mid"
+    show_name: bool = False
+    show_country: bool = True
+    show_institutions: bool = False
+    show_companies: bool = False
+
+class ShowcasePublish(ShowcaseOptions):
+    confirm: bool = False   # the owner has seen the preview and agrees to publish it
+
+class ShowcaseReportCreate(BaseModel):
+    reason: Literal["personal_details", "offensive", "fake"]
 
 # --- ADVANCED RESUME & JD INTELLIGENCE SCHEMAS ---
 class PersonalInfo(BaseModel):

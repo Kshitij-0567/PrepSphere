@@ -69,9 +69,10 @@ const ResumesPage = () => {
         setBusy(resume.id);
         try {
             const res = await api.delete(`/resumes/${resume.id}`);
+            const removedNote = res.data.showcase_removed ? ' It was also removed from the showcase.' : '';
             toast(res.data.was_active
-                ? `${resume.filename} deleted. Choose another active resume to keep your skill profile.`
-                : `${resume.filename} deleted.`);
+                ? `${resume.filename} deleted.${removedNote} Choose another active resume to keep your skill profile.`
+                : `${resume.filename} deleted.${removedNote}`);
             setPendingDelete(null);
             await load();
         } catch (err) {

@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, Float, DateTime, ForeignKey, Text, JSON
+from sqlalchemy import Boolean, Column, Integer, String, Float, DateTime, ForeignKey, Text, JSON, UniqueConstraint
 from sqlalchemy.orm import relationship
 from .database import Base
 import datetime
@@ -19,12 +19,14 @@ class User(Base):
     github_username = Column(String, nullable=True)
     github_data = Column(JSON, nullable=True) # last public-profile import (repos, languages, skills)
     github_synced_at = Column(DateTime, nullable=True)
+    country = Column(String(2), nullable=True) # ISO 3166-1 alpha-2 code, used for benchmarks and the showcase
     created_at = Column(DateTime, default=utcnow)
 
     resumes = relationship("Resume", back_populates="user", cascade="all, delete-orphan")
     candidate_skills = relationship("CandidateSkill", back_populates="user", cascade="all, delete-orphan")
     interviews = relationship("Interview", back_populates="user", cascade="all, delete-orphan")
     recommendations = relationship("Recommendation", back_populates="user", cascade="all, delete-orphan")
+    showcase = relationship("ResumeShowcase", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
 class Role(Base):
     __tablename__ = "roles"
@@ -176,3 +178,36 @@ class Recommendation(Base):
 
     user = relationship("User", back_populates="recommendations")
     interview = relationship("Interview", back_populates="recommendations")
+
+class ResumeShowcase(Base):
+    """A resume the owner chose to publish. `content` is a redacted copy made at publish time,
+    so later uploads never change what others see until the owner updates it."""
+    __tablename__ = "resume_showcases"
+    id = Column(Integer, primary_key=True, index=True)
+    public_id = Column(String, unique=True, index=True, nullable=False) # used in URLs instead of the row id
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    resume_id = Column(Integer, ForeignKey("resumes.id"), nullable=True) # the resume the copy was made from
+    role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
+    seniority = Column(String, default="Mid", nullable=False)
+    handle = Column(String, nullable=False) # anonymous name, e.g. "Quiet Falcon 42"
+    show_name = Column(Boolean, default=False, nullable=False)
+    content = Column(JSON, nullable=False)
+    options = Column(JSON, nullable=True) # what the owner chose to show: institutions, companies
+    hidden = Column(Boolean, default=False, nullable=False) # set after enough reports from other users
+    published_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow)
+
+    user = relationship("User", back_populates="showcase")
+    role = relationship("Role")
+    reports = relationship("ShowcaseReport", back_populates="showcase", cascade="all, delete-orphan")
+
+class ShowcaseReport(Base):
+    __tablename__ = "showcase_reports"
+    __table_args__ = (UniqueConstraint("showcase_id", "reporter_id", name="uq_showcase_reports_reporter"),)
+    id = Column(Integer, primary_key=True, index=True)
+    showcase_id = Column(Integer, ForeignKey("resume_showcases.id"), nullable=False)
+    reporter_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    reason = Column(String, nullable=False) # personal_details, offensive, fake
+    created_at = Column(DateTime, default=utcnow)
+
+    showcase = relationship("ResumeShowcase", back_populates="reports")

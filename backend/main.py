@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -19,12 +19,16 @@ from sqlalchemy.orm import Session, selectinload
 
 from auth import auth_utils
 from core import database, models, schemas, seed_data
-from core.config import QUESTIONS_PER_INTERVIEW, settings
+from core.config import DEMO_EMAIL_DOMAIN, QUESTIONS_PER_INTERVIEW, settings
+from core.countries import COUNTRIES, country_payload, normalize_country
 from core.migrations import run_migrations
 from services import delivery as delivery_service
 from services import github_service, video_interview
+from services import showcase as showcase_service
+from services.benchmarks import build_benchmarks, interview_averages, is_demo, suggest_country
 from services.candidate_profile import (
-    activate_resume, candidate_skill_names, clear_resume_skills, get_active_resume, replace_github_skills,
+    activate_resume, candidate_skill_names, clear_resume_skills, get_active_resume, github_skill_names,
+    replace_github_skills,
 )
 from services.gemini_service import gemini_service
 from services.interview_plan import MAX_FOLLOW_UPS, build_plan, plan_minutes
@@ -36,7 +40,7 @@ from services.skill_gap import HIGH_IMPORTANCE, compute_skill_gap, merge_jd_requ
 logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("prepsphere")
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 ALLOWED_RESUME_EXTENSIONS = (".pdf", ".docx", ".txt")
 LINKEDIN_URL = re.compile(r"^(?:https?://)?(?:[a-z]{2,3}\.)?linkedin\.com/in/([A-Za-z0-9_%-]{3,100})/?(?:\?.*)?$", re.IGNORECASE)
 LINKEDIN_HANDLE = re.compile(r"^[A-Za-z0-9_-]{3,100}$")
@@ -117,6 +121,41 @@ def _interview_difficulty(seniority: str, company: Optional[models.Company]) -> 
     if company is not None:
         level += {"Easy": -1, "Medium": 0, "Hard": 1}.get(company.difficulty_level or "Medium", 0)
     return ("Easy", "Medium", "Hard")[max(0, min(2, level))]
+
+
+def _country_param(value: Optional[str]) -> Optional[str]:
+    """An ISO country code from a request; empty means none."""
+    if not (value or "").strip():
+        return None
+    code = normalize_country(value)
+    if not code:
+        raise HTTPException(status_code=400, detail="Choose a country from the list.")
+    return code
+
+
+def _chosen_role(db: Session, user: models.User, role_id: Optional[int]) -> models.Role:
+    """The requested role, else the role of the user's latest interview, else the first role."""
+    if role_id is not None:
+        role = db.get(models.Role, role_id)
+        if not role:
+            raise HTTPException(status_code=404, detail="Role not found")
+        return role
+    latest = _latest_role_interview(db, user)
+    if latest:
+        return latest.role
+    role = db.query(models.Role).order_by(models.Role.id).first()
+    if not role:
+        raise HTTPException(status_code=404, detail="No roles are available")
+    return role
+
+
+def _latest_role_interview(db: Session, user: models.User) -> Optional[models.Interview]:
+    return (
+        db.query(models.Interview)
+        .filter(models.Interview.user_id == user.id, models.Interview.role_id.isnot(None))
+        .order_by(models.Interview.started_at.desc(), models.Interview.id.desc())
+        .first()
+    )
 
 
 def _resume_summary(resume: Optional[models.Resume]) -> str:
@@ -269,7 +308,7 @@ async def demo_login(db: Session = Depends(database.get_db)):
         raise HTTPException(status_code=404, detail="Demo login is disabled")
     user = models.User(
         name="Demo Candidate",
-        email=f"demo-{secrets.token_hex(8)}@demo.prepsphere.local",
+        email=f"demo-{secrets.token_hex(8)}@{DEMO_EMAIL_DOMAIN}",
         password_hash=None,
     )
     db.add(user)
@@ -287,10 +326,17 @@ async def update_me(
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(auth_utils.get_current_user)
 ):
-    current_user.name = data.name
+    if "name" in data.model_fields_set:
+        current_user.name = data.name
+    if "country" in data.model_fields_set:
+        current_user.country = _country_param(data.country)
     db.commit()
     db.refresh(current_user)
     return current_user
+
+@app.get("/countries")
+async def list_countries():
+    return [{"code": code, "name": name} for code, name in sorted(COUNTRIES.items(), key=lambda item: item[1])]
 
 @app.get("/users/stats", response_model=schemas.UserStats)
 async def get_user_stats(
@@ -534,11 +580,13 @@ async def delete_saved_resume(
 ):
     resume = _get_owned_resume(db, resume_id, current_user)
     was_active = bool(resume.is_active)
+    # A published copy of this resume goes with it.
+    showcase_removed = showcase_service.remove_for_resume(db, current_user, [resume.id])
     db.delete(resume)
     if was_active:
         clear_resume_skills(db, current_user)
     db.commit()
-    return {"message": "Resume deleted successfully", "was_active": was_active}
+    return {"message": "Resume deleted successfully", "was_active": was_active, "showcase_removed": showcase_removed}
 
 @app.get("/profiles/me")
 async def get_candidate_profile(
@@ -598,6 +646,191 @@ async def get_skill_gaps(
 
     gap = compute_skill_gap(role_name, requirements, candidate_skills, resume.raw_text if resume else None)
     return schemas.SkillGapResponse(**gap, has_active_resume=resume is not None)
+
+
+# --- BENCHMARKS & RESUME SHOWCASE ---
+
+@app.get("/benchmarks")
+async def get_benchmarks(
+    role_id: Optional[int] = None,
+    country: Optional[str] = None,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """How the user compares with everyone preparing for a role, worldwide or in one country."""
+    role = _chosen_role(db, current_user, role_id)
+    return build_benchmarks(db, current_user, role, _country_param(country))
+
+
+def _publish_inputs(db: Session, user: models.User, data: schemas.ShowcaseOptions):
+    if is_demo(user):
+        raise HTTPException(status_code=403, detail="Demo accounts cannot publish a resume. Create a free account to use the showcase.")
+    resume = get_active_resume(db, user)
+    if not resume or resume.status != "parsed":
+        raise HTTPException(status_code=400, detail="Upload a resume first. The showcase publishes your active resume.")
+    role = _chosen_role(db, user, data.role_id)
+    options = data.model_dump(include={"seniority", "show_name", "show_country", "show_institutions", "show_companies"})
+    return resume, role, options
+
+
+def _get_showcase(db: Session, public_id: str, user: models.User) -> models.ResumeShowcase:
+    showcase = db.query(models.ResumeShowcase).filter(models.ResumeShowcase.public_id == public_id).first()
+    if not showcase or (showcase.hidden and showcase.user_id != user.id):
+        raise HTTPException(status_code=404, detail="This resume is not in the showcase any more.")
+    return showcase
+
+
+@app.get("/showcase/me")
+async def get_my_showcase(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """The user's published resume (if any), and what the publish form starts from."""
+    resume = get_active_resume(db, current_user)
+    showcase = current_user.showcase
+    if showcase:
+        options = {**(showcase.options or {}), "role_id": showcase.role_id, "seniority": showcase.seniority, "show_name": showcase.show_name}
+    else:
+        latest = _latest_role_interview(db, current_user)
+        options = {
+            "role_id": _chosen_role(db, current_user, None).id,
+            "seniority": (latest.seniority if latest else None) or "Mid",
+            "show_name": False, "show_country": True, "show_institutions": False, "show_companies": False,
+        }
+    blocked = "demo" if is_demo(current_user) else "no_resume" if not resume else None
+    return {
+        "showcase": showcase_service.detail(db, showcase, current_user.id) if showcase else None,
+        "options": options,
+        "handle": showcase.handle if showcase else showcase_service.handle_for(current_user.id),
+        "blocked_reason": blocked,
+        "active_resume": {"id": resume.id, "filename": resume.filename or f"Resume #{resume.id}"} if resume else None,
+        "outdated": bool(showcase and resume and showcase.resume_id != resume.id),
+        "country": country_payload(current_user.country),
+        "suggested_country": None if current_user.country else country_payload(suggest_country(resume)),
+    }
+
+@app.post("/showcase/preview")
+async def preview_showcase(
+    data: schemas.ShowcaseOptions,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """Exactly what other users would see if the active resume were published with these options."""
+    resume, role, options = _publish_inputs(db, current_user, data)
+    handle = current_user.showcase.handle if current_user.showcase else showcase_service.handle_for(current_user.id)
+    interview = interview_averages(db, role.id, [current_user.id]).get(current_user.id)
+    return showcase_service.preview(current_user, resume, role, github_skill_names(db, current_user), options, handle, interview)
+
+@app.put("/showcase")
+async def publish_showcase(
+    data: schemas.ShowcasePublish,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """Publishes the active resume, or replaces the published copy with a fresh one."""
+    if not data.confirm:
+        raise HTTPException(status_code=400, detail="Review the preview and confirm before publishing.")
+    resume, role, options = _publish_inputs(db, current_user, data)
+    content = showcase_service.build_content(
+        current_user, resume, github_skill_names(db, current_user), options["show_institutions"], options["show_companies"]
+    )
+    now = models.utcnow()
+    showcase = current_user.showcase
+    if showcase is None:
+        showcase = models.ResumeShowcase(
+            public_id=showcase_service.new_public_id(db),
+            user_id=current_user.id,
+            handle=showcase_service.handle_for(current_user.id),
+            published_at=now,
+        )
+        db.add(showcase)
+    elif showcase.content != content or showcase.show_name != options["show_name"]:
+        # Reports were about the old copy; a changed copy starts clean. Republishing the same
+        # copy keeps the reports, so a hidden resume cannot simply be put back.
+        for old in list(showcase.reports):
+            db.delete(old)
+        showcase.hidden = False
+    showcase.resume_id = resume.id
+    showcase.role_id = role.id
+    showcase.seniority = options["seniority"]
+    showcase.show_name = options["show_name"]
+    showcase.options = {k: options[k] for k in ("show_country", "show_institutions", "show_companies")}
+    showcase.content = content
+    showcase.updated_at = now
+    db.commit()
+    db.refresh(showcase)
+    return showcase_service.detail(db, showcase, current_user.id)
+
+@app.delete("/showcase")
+async def unpublish_showcase(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """Removes the published copy completely, together with any reports about it."""
+    showcase = current_user.showcase
+    if not showcase:
+        raise HTTPException(status_code=404, detail="You have not published a resume.")
+    db.delete(showcase)
+    db.commit()
+    return {"removed": True}
+
+@app.get("/showcase")
+async def list_showcase(
+    role_id: Optional[int] = None,
+    country: Optional[str] = None,
+    seniority: Optional[schemas.Seniority] = None,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """Published resumes for a role, ranked by candidate score, optionally for one country and level."""
+    role = _chosen_role(db, current_user, role_id)
+    code = _country_param(country)
+    entries = showcase_service.ranked(db, role.id, current_user.id, code, seniority)
+    return {
+        "role": {"id": role.id, "name": role.name},
+        "country": country_payload(code),
+        "seniority": seniority,
+        "total": len(entries),
+        "entries": entries[offset:offset + limit],
+        "you": next((e for e in entries if e["is_you"]), None),
+        "role_counts": showcase_service.role_counts(db),
+        "countries": showcase_service.country_counts(db, role.id),
+    }
+
+@app.get("/showcase/{public_id}")
+async def get_showcase(
+    public_id: str,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    return showcase_service.detail(db, _get_showcase(db, public_id, current_user), current_user.id)
+
+@app.get("/showcase/{public_id}/compare")
+async def compare_showcase(
+    public_id: str,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    """The user's active resume next to a published one, for the published one's role."""
+    showcase = _get_showcase(db, public_id, current_user)
+    return showcase_service.compare(db, current_user, get_active_resume(db, current_user), showcase)
+
+@app.post("/showcase/{public_id}/report")
+async def report_showcase(
+    public_id: str,
+    data: schemas.ShowcaseReportCreate,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth_utils.get_current_user)
+):
+    showcase = _get_showcase(db, public_id, current_user)
+    if showcase.user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="You cannot report your own resume. Update or remove it instead.")
+    if is_demo(current_user):
+        raise HTTPException(status_code=403, detail="Demo accounts cannot report resumes. Create a free account to report one.")
+    created = showcase_service.report(db, showcase, current_user, data.reason)
+    return {"reported": True, "already_reported": not created}
 
 
 # --- COMPANY ENDPOINTS ---

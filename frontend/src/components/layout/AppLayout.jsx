@@ -1,7 +1,7 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
-    BookOpen, Building2, FileText, LayoutGrid, LogOut, Mic, PanelLeft, Play, Settings, Target, User,
+    BookOpen, Building2, ChartColumn, FileText, LayoutGrid, LogOut, Mic, PanelLeft, Play, Settings, Target, Trophy, User,
 } from 'lucide-react';
 import api from '../../api/client';
 import { clearSession } from '../../api/session';
@@ -28,6 +28,13 @@ const NAV = [
             { to: '/study-plan', label: 'Study plan', icon: BookOpen },
         ],
     },
+    {
+        section: 'Compare',
+        items: [
+            { to: '/benchmarks', label: 'Benchmarks', icon: ChartColumn },
+            { to: '/showcase', label: 'Resume showcase', icon: Trophy },
+        ],
+    },
 ];
 
 const TITLES = {
@@ -38,8 +45,18 @@ const TITLES = {
     '/companies': 'Companies',
     '/skill-gaps': 'Skill gaps',
     '/study-plan': 'Study plan',
+    '/benchmarks': 'Benchmarks',
+    '/showcase': 'Resume showcase',
+    '/showcase/publish': 'Publish your resume',
     '/settings': 'Settings',
 };
+
+function pageTitle(pathname) {
+    if (TITLES[pathname]) return TITLES[pathname];
+    if (pathname.startsWith('/interviews/')) return 'Interview results';
+    if (pathname.startsWith('/showcase/')) return 'Showcase resume';
+    return 'PrepSphere';
+}
 
 const COLLAPSE_KEY = 'prepsphere-nav-collapsed';
 
@@ -119,7 +136,7 @@ const AppLayout = () => {
 
     const closeDrawer = () => setDrawerOpen(false);
     const toggleLabel = isPhone ? (drawerOpen ? 'Close menu' : 'Open menu') : (collapsed ? 'Expand sidebar' : 'Collapse sidebar');
-    const title = TITLES[location.pathname] || (location.pathname.startsWith('/interviews/') ? 'Interview results' : 'PrepSphere');
+    const title = pageTitle(location.pathname);
     const inProgress = stats?.in_progress_interviews || 0;
     const appValue = useMemo(() => ({ user, setUser, stats, refreshStats }), [user, stats, refreshStats]);
 
@@ -142,7 +159,7 @@ const AppLayout = () => {
                                             <NavLink
                                                 key={item.to}
                                                 to={item.to}
-                                                end={item.to !== '/interviews'}
+                                                end={item.to !== '/interviews' && item.to !== '/showcase'}
                                                 className="ps-nav-link"
                                                 title={item.label}
                                                 onClick={closeDrawer}

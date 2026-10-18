@@ -16,6 +16,10 @@ PrepSphere helps engineering candidates find out how ready they are for a specif
    - per-question feedback and which expected concepts you covered
    - a prioritized study plan
    - for video interviews: a replay of each answer, a transcript with filler words marked, line-by-line code review, and delivery feedback (speaking pace, filler words, long pauses and eye contact)
+7. **Compare with other candidates**:
+   - **Benchmarks** show your percentile among everyone preparing for the same role, worldwide or in one country, the skills most top candidates have that you don't, and your resume section by section against the averages. Nobody's resume is shown, and a figure only appears when at least 5 candidates stand behind it.
+   - The **Resume showcase** ranks resumes their owners chose to publish, by role, country and level. Publishing makes a redacted copy: name (unless chosen), email, phone, links and address are always removed, and college and company names are hidden by default. The owner sees the exact copy before it goes live and can remove it at any time. Any published resume can be compared side by side with your own, and reported; three reports hide it.
+   - Both rank by one **candidate score**: 60% role readiness plus 40% of the average of your latest 3 mock interviews for the role, so a keyword-stuffed resume cannot top the list on its own. Demo accounts are left out.
 
 Video recordings never leave the browser; they are kept in IndexedDB for the last 5 interviews. Each answer's audio is sent only to be transcribed and is not stored.
 
@@ -93,7 +97,7 @@ cd backend && pip install -r requirements-dev.txt && pytest
 cd frontend && npm run lint && npm run build
 ```
 
-The backend suite covers auth, resume upload and skill gaps, the full interview flow, AI fallbacks, the skill taxonomy, and migrations. It runs against a throwaway SQLite database with no API keys. CI runs the same checks on every push and pull request.
+The backend suite covers auth, resume upload and skill gaps, the full interview flow, AI fallbacks, the skill taxonomy, benchmarks and the showcase (including redaction), and migrations. It runs against a throwaway SQLite database with no API keys. CI runs the same checks on every push and pull request.
 
 ## Project structure
 
@@ -111,6 +115,8 @@ backend/
     interview_plan.py        video interview step plans by role family and seniority
     video_interview.py       video step questions, one-call transcription + scoring, follow-ups (+ fallbacks)
     delivery.py              speaking pace, filler words, pauses and eye contact
+    benchmarks.py            cohorts per role and country, percentiles, top-candidate skills, candidate score
+    showcase.py              redacted published resumes, ranking, side-by-side comparison, reports
   migrations/                Alembic migrations
   tests/
 frontend/src/
@@ -118,6 +124,7 @@ frontend/src/
   pages/Dashboard.jsx        workflow state; one component per step in pages/dashboard/
   pages/interview/           video interview: setup check, interview room, results; lib/ has media, speech,
                              recordings (IndexedDB), face tracking and the room controller
+  pages/showcase/            benchmarks, the showcase leaderboard, publishing with a live preview, comparison
   pages/LandingPage.jsx, Login.jsx, Signup.jsx
 frontend/public/models/      MediaPipe face model, served from the site
 ```
@@ -134,6 +141,10 @@ frontend/public/models/      MediaPipe face model, served from the site
 | `POST /interviews`, `POST /interviews/{id}/answers`, `GET /interviews/{id}/results` | Mock interview (`mode`: `text` or `video`) |
 | `GET /roles/{id}/video-plan`, `POST /interviews/{id}/video-answers`, `POST /interviews/{id}/finish`, `POST /interviews/{id}/resume` | Video interview plan, multipart answers (audio, code, whiteboard PNG), ending early, resuming |
 | `GET /interviews/history`, `GET /recommendations` | History |
+| `GET /countries`, `PATCH /users/me` (`country`) | Country list; the user's country |
+| `GET /benchmarks?role_id=&country=` | Percentiles and averages for a role, worldwide or in one country |
+| `GET /showcase/me`, `POST /showcase/preview`, `PUT /showcase`, `DELETE /showcase` | Your published resume: preview, publish or update, remove |
+| `GET /showcase?role_id=&country=&seniority=`, `GET /showcase/{id}`, `GET /showcase/{id}/compare`, `POST /showcase/{id}/report` | Leaderboard, one published resume, comparison with yours, reporting |
 
 Interactive documentation is available at `http://127.0.0.1:8000/docs`.
 

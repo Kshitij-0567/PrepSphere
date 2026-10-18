@@ -7,12 +7,17 @@ import { useApp } from '../components/layout/appContext';
 import { useFeedback } from '../components/ui/feedbackContext';
 import LinkedProfiles from './profile/LinkedProfiles';
 import { KEEP_INTERVIEWS, deleteAllClips, formatBytes, usage } from './interview/lib/recordings';
+import { CountrySelect } from './showcase/ShowcaseParts';
+import { useCountries } from './showcase/showcaseData';
 
 const AccountForm = ({ user, onSaved }) => {
     const { toast } = useFeedback();
+    const countries = useCountries();
     const [name, setName] = useState(user.name || '');
+    const [country, setCountry] = useState(user.country || '');
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
+    const unchanged = name.trim() === (user.name || '') && country === (user.country || '');
 
     const submit = async (e) => {
         e.preventDefault();
@@ -20,11 +25,11 @@ const AccountForm = ({ user, onSaved }) => {
         setSaving(true);
         setError('');
         try {
-            const res = await api.patch('/users/me', { name: name.trim() });
+            const res = await api.patch('/users/me', { name: name.trim(), country });
             onSaved(res.data);
-            toast('Your name was updated.');
+            toast('Your account was updated.');
         } catch (err) {
-            setError(apiErrorMessage(err, 'Could not update your name.'));
+            setError(apiErrorMessage(err, 'Could not update your account.'));
         }
         setSaving(false);
     };
@@ -42,8 +47,13 @@ const AccountForm = ({ user, onSaved }) => {
                 <input id="ps-settings-email" className="ps-input" type="email" value={user.email} readOnly aria-describedby="ps-settings-email-help" />
                 <p className="ps-help" id="ps-settings-email-help">Your email is your sign-in and cannot be changed here.</p>
             </div>
+            <div className="ps-field">
+                <label htmlFor="ps-settings-country">Country</label>
+                <CountrySelect id="ps-settings-country" countries={countries} value={country} onChange={(code) => setCountry(code || '')} emptyLabel="Not set" />
+                <p className="ps-help">Used to compare you with candidates in your country, and shown on your showcase resume if you publish one.</p>
+            </div>
             <div>
-                <button className="ps-btn ps-btn-primary" type="submit" disabled={saving || name.trim() === (user.name || '')}>
+                <button className="ps-btn ps-btn-primary" type="submit" disabled={saving || unchanged}>
                     {saving && <Loader2 size={14} className="ps-spin" aria-hidden="true" />}
                     {saving ? 'Saving…' : 'Save changes'}
                 </button>
@@ -127,10 +137,10 @@ const SettingsPage = () => {
                 <div className="ps-card-head">
                     <div>
                         <h2 className="ps-card-title" id="ps-acc-title">Account</h2>
-                        <p className="ps-card-sub">How your name appears across PrepSphere.</p>
+                        <p className="ps-card-sub">How your name appears across PrepSphere, and where you are.</p>
                     </div>
                 </div>
-                {user ? <AccountForm key={user.name || ''} user={user} onSaved={setUser} /> : <div className="ps-skeleton" style={{ height: 150 }} />}
+                {user ? <AccountForm key={`${user.name || ''}|${user.country || ''}`} user={user} onSaved={setUser} /> : <div className="ps-skeleton" style={{ height: 150 }} />}
             </article>
 
             <article className="ps-card" aria-labelledby="ps-links-title">

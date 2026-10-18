@@ -17,6 +17,10 @@ const SkillGapsPage = lazy(() => import('./pages/SkillGapsPage'));
 const StudyPlanPage = lazy(() => import('./pages/StudyPlanPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const VideoInterviewPage = lazy(() => import('./pages/interview/VideoInterviewPage'));
+const BenchmarksPage = lazy(() => import('./pages/showcase/BenchmarksPage'));
+const ShowcasePage = lazy(() => import('./pages/showcase/ShowcasePage'));
+const PublishShowcasePage = lazy(() => import('./pages/showcase/PublishShowcasePage'));
+const ShowcaseDetailPage = lazy(() => import('./pages/showcase/ShowcaseDetailPage'));
 
 const PageLoader = () => (
   <div role="status" aria-label="Loading" style={{ minHeight: '60vh', display: 'grid', placeItems: 'center', color: '#6f7b98', fontSize: 14 }}>
@@ -55,6 +59,10 @@ function App() {
           <Route path="/companies" element={<CompaniesPage />} />
           <Route path="/skill-gaps" element={<SkillGapsPage />} />
           <Route path="/study-plan" element={<StudyPlanPage />} />
+          <Route path="/benchmarks" element={<BenchmarksPage />} />
+          <Route path="/showcase" element={<ShowcasePage />} />
+          <Route path="/showcase/publish" element={<PublishShowcasePage />} />
+          <Route path="/showcase/:publicId" element={<ShowcaseDetailPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

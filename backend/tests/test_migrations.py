@@ -35,7 +35,7 @@ def test_database_created_by_old_create_all_is_adopted(tmp_path):
     run_migrations(url)
 
     with engine.connect() as connection:
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0004_video_interviews"
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0005_benchmarks_showcase"
         assert connection.execute(text("SELECT password_hash FROM users WHERE id = 1")).scalar() is None
         active = connection.execute(text("SELECT id FROM resumes WHERE is_active = 1")).scalars().all()
         assert active == [2]
