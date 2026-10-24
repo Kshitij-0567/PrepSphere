@@ -18,6 +18,7 @@ FROM python:3.12-slim
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    APP_ENV=production \
     STATIC_DIR=/app/static \
     DATABASE_URL=sqlite:////data/interview_prep.db
 
@@ -33,4 +34,5 @@ USER appuser
 VOLUME ["/data"]
 
 EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Behind a reverse proxy, set FORWARDED_ALLOW_IPS to its address so rate limits see real client IPs.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-server-header"]

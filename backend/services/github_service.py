@@ -39,6 +39,12 @@ GITHUB_LANGUAGE_SKILLS = {
 }
 
 
+def _github_link(url: Optional[str], fallback: str) -> str:
+    """Links shown on the profile page must point at github.com over HTTPS, never at another
+    scheme such as javascript:, whatever the API response says."""
+    return url if isinstance(url, str) and url.startswith("https://github.com/") else fallback
+
+
 def parse_username(value: str) -> Optional[str]:
     """Accepts 'name', '@name', 'github.com/name' or a full profile URL."""
     text = (value or "").strip()
@@ -116,10 +122,11 @@ def summarize(user: Dict[str, Any], repos: List[Dict[str, Any]]) -> Dict[str, An
     ]
 
     top = sorted(own, key=lambda r: (r.get("stargazers_count") or 0, r.get("pushed_at") or ""), reverse=True)[:3]
+    login = user.get("login") or ""
     return {
-        "username": user.get("login"),
+        "username": login,
         "name": user.get("name"),
-        "profile_url": user.get("html_url") or f"https://github.com/{user.get('login')}",
+        "profile_url": _github_link(user.get("html_url"), f"https://github.com/{login}"),
         "public_repos": user.get("public_repos") or len(own),
         "followers": user.get("followers") or 0,
         "stars": sum(r.get("stargazers_count") or 0 for r in own),
@@ -130,7 +137,7 @@ def summarize(user: Dict[str, Any], repos: List[Dict[str, Any]]) -> Dict[str, An
                 "description": r.get("description") or "",
                 "language": r.get("language"),
                 "stars": r.get("stargazers_count") or 0,
-                "url": r.get("html_url"),
+                "url": _github_link(r.get("html_url"), f"https://github.com/{login}/{r.get('name') or ''}"),
             }
             for r in top
         ],

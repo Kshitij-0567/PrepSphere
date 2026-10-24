@@ -1,10 +1,9 @@
+// Must stay the first import: it tells Excalidraw where its fonts are before Excalidraw loads.
+import './lib/excalidrawAssets';
 import React, { forwardRef, useImperativeHandle, useMemo, useRef } from 'react';
 import { Excalidraw, exportToBlob } from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 import { readDraft, writeDraft } from './lib/delivery';
-
-// Fonts are served from this site (see vite.config.js) instead of Excalidraw's CDN.
-window.EXCALIDRAW_ASSET_PATH = '/excalidraw-assets/';
 
 const UI_OPTIONS = {
     canvasActions: {

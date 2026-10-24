@@ -7,6 +7,7 @@ and Resume Quality & Completeness Analysis.
 import io
 import logging
 import re
+import zipfile
 from typing import Dict, Any, List
 
 import pypdf
@@ -16,6 +17,31 @@ from .skill_taxonomy import categorize_skills, extract_skills_with_evidence
 from .gemini_service import AIUnavailableError, gemini_service
 
 logger = logging.getLogger(__name__)
+
+# Uploaded files are untrusted: these limits stop a crafted file from tying up the server.
+MAX_PDF_PAGES = 30
+MAX_TEXT_CHARS = 100_000
+MAX_DOCX_ENTRIES = 2_000
+MAX_DOCX_EXPANDED_BYTES = 50 * 1024 * 1024  # a .docx is a zip; refuse "zip bombs"
+UNREADABLE_FILE = ("We couldn't read this file. Make sure it isn't password-protected or damaged, "
+                   "then try again, or save it as PDF, DOCX or TXT.")
+
+
+class ResumeFileError(ValueError):
+    """A problem with an uploaded file, worded for the person who uploaded it."""
+
+
+def _check_docx_archive(file_bytes: bytes) -> None:
+    """Rejects a .docx whose zip entries would expand to an unreasonable size. Python's zip reader
+    never decompresses past an entry's declared size, so checking the declared sizes is enough."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as archive:
+            entries = archive.infolist()
+    except zipfile.BadZipFile:
+        raise ResumeFileError("This .docx file is damaged or is not a Word document. Save it again and retry.")
+    if len(entries) > MAX_DOCX_ENTRIES or sum(e.file_size for e in entries) > MAX_DOCX_EXPANDED_BYTES:
+        raise ResumeFileError("This .docx file expands to an unusually large size, so it was not opened. "
+                              "Save it again from Word and retry.")
 
 _EMAIL_PROVIDERS = ("gmail.", "yahoo.", "outlook.", "hotmail.", "icloud.", "proton")
 _URL_PATTERN = re.compile(
@@ -38,12 +64,15 @@ class ResumeIntelligenceService:
         """
         fn = filename.lower()
         text = ""
+        if fn.endswith('.docx'):
+            _check_docx_archive(file_bytes)
         try:
             if fn.endswith('.pdf'):
                 reader = pypdf.PdfReader(io.BytesIO(file_bytes))
-                for page in reader.pages:
-                    page_text = page.extract_text() or ""
-                    text += page_text + "\n"
+                for index in range(min(len(reader.pages), MAX_PDF_PAGES)):
+                    text += (reader.pages[index].extract_text() or "") + "\n"
+                    if len(text) > MAX_TEXT_CHARS:
+                        break
             elif fn.endswith('.docx'):
                 doc = docx.Document(io.BytesIO(file_bytes))
                 for p in doc.paragraphs:
@@ -56,10 +85,12 @@ class ResumeIntelligenceService:
                             text += row_text + "\n"
             else: # .txt
                 text = file_bytes.decode('utf-8', errors='ignore')
-        except Exception as e:
-            raise ValueError(f"Failed to parse {filename}: {str(e)}")
+        except Exception:
+            # The parser's own message can expose internals; log it, tell the user something useful.
+            logger.warning("Could not read an uploaded %s file", fn.rsplit(".", 1)[-1], exc_info=True)
+            raise ResumeFileError(UNREADABLE_FILE)
 
-        text = text.strip()
+        text = text[:MAX_TEXT_CHARS].strip()
         if not text:
             raise ValueError("The uploaded document appears to be empty or an image-only scanned PDF with no readable text layer.")
         if len(text) < 50:

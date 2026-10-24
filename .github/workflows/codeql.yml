@@ -1,17 +1,19 @@
-name: "InterviewAI Security Scan (CodeQL)"
+name: CodeQL
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ main ]
   schedule:
     - cron: '30 18 * * 1'
 
 jobs:
   analyze:
-    name: Analyze
-    runs-on: "ubuntu-latest"
+    name: Analyze (${{ matrix.language }})
+    # Code scanning is free for public repositories only; on a private one this job is skipped.
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
@@ -20,21 +22,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [ 'javascript', 'python' ]
+        language: [ javascript-typescript, python ]
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Initialize CodeQL
-      uses: github/codeql-action/init@v3
-      with:
-        languages: ${{ matrix.language }}
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
 
-    - name: Autobuild
-      uses: github/codeql-action/autobuild@v3
-
-    - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v3
-      with:
-        category: "/language:${{matrix.language}}"
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

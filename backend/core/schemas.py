@@ -1,10 +1,15 @@
 import re
+import unicodedata
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import List, Literal, Optional, Dict, Any
 from datetime import datetime
 
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 Seniority = Literal["Junior", "Mid", "Senior"]
+# Characters with no place in a person's name, and that would matter if a name were ever put
+# into HTML or a spreadsheet outside React's escaping (a leading = + - @ starts a formula).
+NAME_MARKUP = re.compile(r"[<>\"`{}\\]")
+FORMULA_PREFIX = "=+-@"
 
 
 def _normalize_email(value: str) -> str:
@@ -12,6 +17,24 @@ def _normalize_email(value: str) -> str:
     if not EMAIL_PATTERN.match(email) or len(email) > 254:
         raise ValueError("Enter a valid email address")
     return email
+
+
+def clean_display_name(value: str, limit: int = 120) -> str:
+    """Normalizes a name: Unicode NFC, no control or invisible formatting characters, single
+    spaces, no markup characters. Used for names typed in forms and names from Google."""
+    text = unicodedata.normalize("NFC", value or "")
+    text = "".join(ch for ch in text if unicodedata.category(ch) not in ("Cc", "Cf", "Cs", "Co"))
+    text = NAME_MARKUP.sub("", " ".join(text.split()))
+    return text.lstrip(FORMULA_PREFIX + " ")[:limit].strip()
+
+
+def _validated_name(value: Optional[str]) -> Optional[str]:
+    """Rejects names a person would not type (with a clear message); quietly cleans the rest."""
+    if value is None:
+        return None
+    if NAME_MARKUP.search(value) or value.strip()[:1] in tuple(FORMULA_PREFIX):
+        raise ValueError("Names can't contain < > \" ` { } \\ or start with = + - @")
+    return clean_display_name(value)
 
 
 # --- AUTH SCHEMAS ---
@@ -26,11 +49,16 @@ class UserRegister(BaseModel):
     def _valid_email(cls, value: str) -> str:
         return _normalize_email(value)
 
+    @field_validator("name", "full_name")
+    @classmethod
+    def _clean_name(cls, value: Optional[str]) -> Optional[str]:
+        return _validated_name(value)
+
     def get_display_name(self) -> str:
         return (self.name or self.full_name or "").strip() or self.email.split("@")[0]
 
 class UserLogin(BaseModel):
-    email: str
+    email: str = Field(max_length=254)
     password: str = Field(max_length=128)
 
     @field_validator("email")
@@ -39,7 +67,7 @@ class UserLogin(BaseModel):
         return (value or "").strip().lower()
 
 class GoogleLoginRequest(BaseModel):
-    token: str
+    token: str = Field(max_length=4096)
 
 class UserUpdate(BaseModel):
     """Only the fields that are sent change. An empty country removes it."""
@@ -49,9 +77,10 @@ class UserUpdate(BaseModel):
     @field_validator("name")
     @classmethod
     def _not_blank(cls, value: Optional[str]) -> str:
-        if value is None or not value.strip():
+        cleaned = _validated_name(value)
+        if not cleaned:
             raise ValueError("Name cannot be empty")
-        return value.strip()
+        return cleaned
 
 class ProfileLinksUpdate(BaseModel):
     """Only the fields that are sent change; an empty string or null removes a link."""

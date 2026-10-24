@@ -18,9 +18,10 @@ from google.oauth2 import id_token
 from sqlalchemy.orm import Session, selectinload
 
 from auth import auth_utils
-from core import database, models, schemas, seed_data
+from core import database, models, schemas, security, seed_data
 from core.config import DEMO_EMAIL_DOMAIN, QUESTIONS_PER_INTERVIEW, settings
 from core.countries import COUNTRIES, country_payload, normalize_country
+from core.frontend import PageLoadMiddleware
 from core.migrations import run_migrations
 from services import delivery as delivery_service
 from services import github_service, video_interview
@@ -46,11 +47,9 @@ LINKEDIN_URL = re.compile(r"^(?:https?://)?(?:[a-z]{2,3}\.)?linkedin\.com/in/([A
 LINKEDIN_HANDLE = re.compile(r"^[A-Za-z0-9_-]{3,100}$")
 GITHUB_ERROR_STATUS = {"not_found": 404, "rate_limited": 429, "unavailable": 502}
 
-if not settings.secret_key:
-    raise RuntimeError(
-        "SECRET_KEY is not set. Add it to backend/.env; generate one with: "
-        "python -c \"import secrets; print(secrets.token_urlsafe(48))\""
-    )
+_problems = settings.problems()
+if _problems:
+    raise RuntimeError("Unsafe configuration in backend/.env:\n- " + "\n- ".join(_problems))
 if len(settings.secret_key) < 32:
     logger.warning("SECRET_KEY is shorter than 32 characters; use a longer random value in production.")
 
@@ -73,15 +72,32 @@ app = FastAPI(
     title="PrepSphere — AI-Powered Interview Preparation & Skill Assessment Platform",
     description="Resume skill extraction, role skill-gap analysis, and AI mock interviews with rubric scoring.",
     version=APP_VERSION,
-    lifespan=lifespan
+    lifespan=lifespan,
+    # The interactive API docs are for development; production hides them (ENABLE_API_DOCS).
+    docs_url="/docs" if settings.docs_enabled else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if settings.docs_enabled else None,
+    dependencies=[security.global_limit],
 )
 
+# The built React app, when this backend serves it (production builds and the Docker image).
+_static_dir = settings.static_dir.resolve()
+_serves_frontend = (_static_dir / "index.html").is_file()
+
+# Added innermost first: CORS is outermost, so even 413 and 429 responses carry CORS headers
+# and the frontend can show their message, and every page gets the security headers.
+if _serves_frontend:
+    app.add_middleware(PageLoadMiddleware, static_dir=_static_dir)
+app.add_middleware(security.BodySizeLimitMiddleware, max_bytes=settings.max_request_bytes)
+app.add_middleware(security.SecurityHeadersMiddleware, hsts=settings.is_production)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Sign-in tokens travel in the Authorization header, not cookies, so no credentials are needed.
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+    max_age=600,
 )
 
 
@@ -253,8 +269,8 @@ async def health():
 
 # --- AUTH ENDPOINTS (SRS FR-01 & Section 11) ---
 
-@app.post("/auth/register", response_model=schemas.Token)
-@app.post("/auth/signup", response_model=schemas.Token)
+@app.post("/auth/register", response_model=schemas.Token, dependencies=[security.per_ip("signup", 30, 600)])
+@app.post("/auth/signup", response_model=schemas.Token, dependencies=[security.per_ip("signup", 30, 600)])
 async def register(user_data: schemas.UserRegister, db: Session = Depends(database.get_db)):
     if auth_utils.get_user_by_email(db, user_data.email):
         raise HTTPException(status_code=400, detail="Email is already registered")
@@ -266,17 +282,21 @@ async def register(user_data: schemas.UserRegister, db: Session = Depends(databa
     db.refresh(user)
     return _token_response(user)
 
-@app.post("/auth/login", response_model=schemas.Token)
+@app.post("/auth/login", response_model=schemas.Token, dependencies=[security.per_ip("login", 20, 60)])
 async def login(login_data: schemas.UserLogin, db: Session = Depends(database.get_db)):
+    security.login_blocked(login_data.email)
     user = auth_utils.get_user_by_email(db, login_data.email)
-    valid = user is not None and await run_in_threadpool(
-        auth_utils.verify_password, login_data.password, user.password_hash
+    # Always checks a password, even for an unknown email, so timing does not reveal which emails exist.
+    valid = await run_in_threadpool(
+        auth_utils.verify_password, login_data.password, user.password_hash if user else None
     )
-    if not valid:
+    if not valid or user is None:
+        security.record_failed_login(login_data.email)
         raise HTTPException(status_code=400, detail="Invalid email or password")
+    security.clear_failed_logins(login_data.email)
     return _token_response(user)
 
-@app.post("/auth/google", response_model=schemas.Token)
+@app.post("/auth/google", response_model=schemas.Token, dependencies=[security.per_ip("google", 30, 60)])
 async def google_login(data: schemas.GoogleLoginRequest, db: Session = Depends(database.get_db)):
     if not settings.google_client_id:
         raise HTTPException(status_code=503, detail="Google sign-in is not configured on this server")
@@ -295,13 +315,14 @@ async def google_login(data: schemas.GoogleLoginRequest, db: Session = Depends(d
 
     user = auth_utils.get_user_by_email(db, email)
     if not user:
-        user = models.User(email=email, name=idinfo.get("name") or email.split("@")[0], password_hash=None)
+        name = schemas.clean_display_name(idinfo.get("name") or "") or email.split("@")[0]
+        user = models.User(email=email, name=name, password_hash=None)
         db.add(user)
         db.commit()
         db.refresh(user)
     return _token_response(user)
 
-@app.post("/auth/demo", response_model=schemas.Token)
+@app.post("/auth/demo", response_model=schemas.Token, dependencies=[security.per_ip("demo", 10, 600)])
 async def demo_login(db: Session = Depends(database.get_db)):
     """Creates a fresh, private demo account so demo visitors never see each other's data."""
     if not settings.demo_login_enabled:
@@ -394,7 +415,7 @@ async def get_profile_summary(
 ):
     return build_profile_summary(db, current_user)
 
-@app.put("/profile/links")
+@app.put("/profile/links", dependencies=[security.per_user("github", 10, 600)])
 async def update_profile_links(
     data: schemas.ProfileLinksUpdate,
     db: Session = Depends(database.get_db),
@@ -437,7 +458,7 @@ async def update_profile_links(
     db.refresh(current_user)
     return {"links": _links_payload(current_user), "github": current_user.github_data, "warning": warning}
 
-@app.post("/profile/github/sync")
+@app.post("/profile/github/sync", dependencies=[security.per_user("github", 10, 600)])
 async def sync_github(
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(auth_utils.get_current_user)
@@ -482,7 +503,7 @@ async def get_video_plan(role_id: int, seniority: schemas.Seniority = "Mid", db:
     plan = build_plan(role.category, seniority)
     return {"plan": plan, "minutes": plan_minutes(plan)}
 
-@app.post("/resumes/upload")
+@app.post("/resumes/upload", dependencies=[security.per_user("resume-upload", 10, 600)])
 async def upload_resume(
     file: UploadFile = File(...),
     db: Session = Depends(database.get_db),
@@ -521,7 +542,7 @@ async def upload_resume(
     )
     db.add(resume)
     db.flush()
-    detected_name = analysis.get("personal_info", {}).get("name")
+    detected_name = schemas.clean_display_name(analysis.get("personal_info", {}).get("name") or "")
     if detected_name and not current_user.name:
         current_user.name = detected_name
     activate_resume(db, current_user, resume)
@@ -607,7 +628,7 @@ async def get_candidate_profile(
 
 # --- JOB DESCRIPTION INTELLIGENCE ENDPOINTS ---
 
-@app.post("/jobs/analyze", response_model=schemas.JobAnalysisResponse)
+@app.post("/jobs/analyze", response_model=schemas.JobAnalysisResponse, dependencies=[security.per_user("jd-analyze", 20, 600)])
 async def analyze_job_description(
     req: schemas.JobAnalysisRequest,
     current_user: models.User = Depends(auth_utils.get_current_user)
@@ -650,7 +671,7 @@ async def get_skill_gaps(
 
 # --- BENCHMARKS & RESUME SHOWCASE ---
 
-@app.get("/benchmarks")
+@app.get("/benchmarks", dependencies=[security.per_user("benchmarks", 60, 60)])
 async def get_benchmarks(
     role_id: Optional[int] = None,
     country: Optional[str] = None,
@@ -709,7 +730,7 @@ async def get_my_showcase(
         "suggested_country": None if current_user.country else country_payload(suggest_country(resume)),
     }
 
-@app.post("/showcase/preview")
+@app.post("/showcase/preview", dependencies=[security.per_user("showcase-preview", 120, 600)])
 async def preview_showcase(
     data: schemas.ShowcaseOptions,
     db: Session = Depends(database.get_db),
@@ -721,7 +742,7 @@ async def preview_showcase(
     interview = interview_averages(db, role.id, [current_user.id]).get(current_user.id)
     return showcase_service.preview(current_user, resume, role, github_skill_names(db, current_user), options, handle, interview)
 
-@app.put("/showcase")
+@app.put("/showcase", dependencies=[security.per_user("showcase-publish", 20, 3600)])
 async def publish_showcase(
     data: schemas.ShowcasePublish,
     db: Session = Depends(database.get_db),
@@ -817,7 +838,7 @@ async def compare_showcase(
     showcase = _get_showcase(db, public_id, current_user)
     return showcase_service.compare(db, current_user, get_active_resume(db, current_user), showcase)
 
-@app.post("/showcase/{public_id}/report")
+@app.post("/showcase/{public_id}/report", dependencies=[security.per_user("showcase-report", 20, 86400)])
 async def report_showcase(
     public_id: str,
     data: schemas.ShowcaseReportCreate,
@@ -973,7 +994,7 @@ async def _step_question(db: Session, interview: models.Interview, user: models.
     return _new_question(interview, q_data, kind=step["kind"], step_index=step_index, details=q_data.get("details"))
 
 
-@app.post("/interviews")
+@app.post("/interviews", dependencies=[security.per_user("interview-start", 20, 3600)])
 async def create_interview(
     data: schemas.InterviewCreate,
     db: Session = Depends(database.get_db),
@@ -1076,7 +1097,7 @@ async def get_interview_history(
         })
     return history
 
-@app.post("/interviews/{interview_id}/resume")
+@app.post("/interviews/{interview_id}/resume", dependencies=[security.per_user("interview-resume", 30, 600)])
 async def resume_interview(
     interview_id: int,
     db: Session = Depends(database.get_db),
@@ -1155,7 +1176,7 @@ async def get_current_question(
         raise HTTPException(status_code=404, detail="No question generated yet")
     return latest_question
 
-@app.post("/interviews/{interview_id}/answers")
+@app.post("/interviews/{interview_id}/answers", dependencies=[security.per_user("interview-answer", 60, 600)])
 async def submit_answer(
     interview_id: int,
     data: schemas.AnswerSubmit,
@@ -1254,7 +1275,7 @@ def _json_form(value: str, limit: int, label: str) -> Any:
         raise HTTPException(status_code=400, detail=f"The {label} data is not valid JSON.")
 
 
-@app.post("/interviews/{interview_id}/video-answers")
+@app.post("/interviews/{interview_id}/video-answers", dependencies=[security.per_user("interview-answer", 60, 600)])
 async def submit_video_answer(
     interview_id: int,
     question_id: int = Form(...),
@@ -1409,7 +1430,7 @@ async def submit_video_answer(
     }
 
 
-@app.post("/interviews/{interview_id}/finish")
+@app.post("/interviews/{interview_id}/finish", dependencies=[security.per_user("interview-finish", 20, 600)])
 async def finish_interview(
     interview_id: int,
     db: Session = Depends(database.get_db),
@@ -1544,8 +1565,7 @@ async def get_recommendations(
 # --- FRONTEND (production builds only) ---
 # The Docker image copies the built React app into STATIC_DIR. Registered last so every API
 # route above takes precedence; any other path returns index.html for client-side routing.
-_static_dir = settings.static_dir.resolve()
-if (_static_dir / "index.html").is_file():
+if _serves_frontend:
     if (_static_dir / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=_static_dir / "assets"), name="assets")
 
@@ -1554,6 +1574,11 @@ if (_static_dir / "index.html").is_file():
         candidate = (_static_dir / full_path).resolve()
         if full_path and candidate.is_file() and _static_dir in candidate.parents:
             return FileResponse(candidate)
+        # A missing file (anything with a dot in its last segment, such as /.env or /db.sqlite)
+        # is a plain 404, so scanners don't mistake the app page for an exposed file. Other paths
+        # are client-side routes and get the app.
+        if "." in full_path.rsplit("/", 1)[-1]:
+            raise HTTPException(status_code=404, detail="Not found")
         return FileResponse(_static_dir / "index.html")
 
 
@@ -1563,5 +1588,7 @@ if __name__ == "__main__":
         "main:app",
         host=os.getenv("HOST", "127.0.0.1"),
         port=int(os.getenv("PORT", "8000")),
-        reload=os.getenv("RELOAD", "true").lower() == "true",
+        # Auto-reload is a development convenience; turn it on with RELOAD=true.
+        reload=os.getenv("RELOAD", "false").lower() == "true" and not settings.is_production,
+        server_header=False,
     )

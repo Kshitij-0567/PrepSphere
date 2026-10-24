@@ -11,6 +11,13 @@ import './showcase.css';
 
 const byKey = Object.fromEntries(METRICS.map(m => [m.key, m]));
 
+/** "31st percentile among 8 candidates", with plain words at the two ends of the scale. */
+const Standing = ({ pct, among }) => {
+    if (pct === 0) return <><b>Lowest</b> {among.replace(/^among/, 'of')}</>;
+    if (pct === 100) return <><b>Highest</b> {among.replace(/^among/, 'of')}</>;
+    return <><b>{ordinal(pct)}</b> percentile {among}</>;
+};
+
 const Tile = ({ label, metric, value, children }) => (
     <div className="ps-tile">
         <span className="ps-tile-label">{label}</span>
@@ -138,16 +145,16 @@ const BenchmarksPage = () => {
                 <div style={{ opacity: loading ? 0.55 : 1, transition: 'opacity .2s', display: 'flex', flexDirection: 'column', gap: 20 }}>
                     <div className="ps-tiles">
                         <Tile label="Candidate score" metric={byKey.score} value={you?.score}>
-                            {pct?.score != null ? <><b>{ordinal(pct.score)}</b> percentile among {plural(data.cohort_size, 'candidate')} {where}</> : '60% readiness + 40% mock interviews'}
+                            {pct?.score != null ? <Standing pct={pct.score} among={`among ${plural(data.cohort_size, 'candidate')} ${where}`} /> : '60% readiness + 40% mock interviews'}
                         </Tile>
                         <Tile label="Role readiness" metric={byKey.readiness} value={you?.readiness}>
-                            {pct?.readiness != null ? <><b>{ordinal(pct.readiness)}</b> percentile {where}</> : 'Required skills your profile covers, by weight'}
+                            {pct?.readiness != null ? <Standing pct={pct.readiness} among={`among candidates ${where}`} /> : 'Required skills your profile covers, by weight'}
                         </Tile>
                         <Tile label="Mock interview average" metric={byKey.interview} value={you?.interview}>
                             {you && you.interview == null
                                 ? <>No completed interview for this role yet. <Link to="/dashboard" state={{ roleId: data.role.id }}>Practice now</Link></>
                                 : pct?.interview != null
-                                    ? <><b>{ordinal(pct.interview)}</b> percentile among {plural(pct.interview_candidates, 'candidate')} with one</>
+                                    ? <Standing pct={pct.interview} among={`among ${plural(pct.interview_candidates, 'candidate')} with one`} />
                                     : 'Your latest 3 completed interviews for this role'}
                         </Tile>
                     </div>

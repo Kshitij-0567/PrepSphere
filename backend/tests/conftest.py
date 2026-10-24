@@ -20,22 +20,10 @@ os.environ["SECRET_KEY"] = "test-secret-key-that-is-long-enough-for-hs256-signin
 os.environ["GEMINI_API_KEY"] = ""
 os.environ["GOOGLE_CLIENT_ID"] = ""
 os.environ["DEMO_LOGIN_ENABLED"] = "true"
+os.environ["APP_ENV"] = "development"
+# The suite creates hundreds of accounts from one address; test_security.py turns limits on.
+os.environ["RATE_LIMITS_ENABLED"] = "false"
 os.environ["STATIC_DIR"] = str(_TMP_DIR / "no-frontend-build")
-
-# Tests for the legacy InterviewAI modules (LangGraph agents, JSON company registry,
-# multi-round config). The PrepSphere app no longer imports that code; these files can be
-# deleted together with it.
-collect_ignore = [
-    "test_api_endpoints.py",
-    "test_company_intel.py",
-    "test_discovery_data.py",
-    "test_fuzzy_matching.py",
-    "test_intelligence_agent.py",
-    "test_memory_service.py",
-    "test_round_config.py",
-    "run_all_tests.py",
-    "check_gpu.py",
-]
 
 
 @pytest.fixture(scope="session")

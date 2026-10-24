@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 import pytest
-from jose import jwt
+import jwt
 
 from auth import auth_utils
 from core.config import settings

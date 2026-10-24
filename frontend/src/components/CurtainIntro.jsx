@@ -3,6 +3,67 @@ import { motion } from 'framer-motion';
 import { ArrowDown, Sparkles } from 'lucide-react';
 import './CurtainIntro.css';
 
+/** One drifting dot in the intro background. `scene` holds the canvas size, its 2D context and the mouse ref. */
+class PacketParticle {
+    constructor(scene) {
+        this.scene = scene;
+        this.reset();
+    }
+
+    reset() {
+        const { width, height } = this.scene;
+        this.x = Math.random() * width;
+        this.y = Math.random() * height;
+        this.vx = (Math.random() - 0.5) * 0.7;
+        this.vy = (Math.random() - 0.5) * 0.7;
+        this.size = Math.random() * 2.2 + 1;
+        this.baseAlpha = Math.random() * 0.45 + 0.2;
+        this.alpha = this.baseAlpha;
+        this.hue = Math.random() > 0.6 ? 220 : Math.random() > 0.3 ? 260 : 190; // Cosmic blue, cyan, violet
+        this.pulseSpeed = Math.random() * 0.02 + 0.01;
+        this.pulseAngle = Math.random() * Math.PI * 2;
+        this.isDataPacket = Math.random() > 0.7;
+    }
+
+    update() {
+        const { width, height, mouse } = this.scene;
+        this.x += this.vx;
+        this.y += this.vy;
+
+        this.pulseAngle += this.pulseSpeed;
+        this.alpha = this.baseAlpha + Math.sin(this.pulseAngle) * 0.2;
+
+        // Mouse magnetic repulsion / interaction
+        if (mouse.current.active) {
+            const dx = mouse.current.x - this.x;
+            const dy = mouse.current.y - this.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < 160 && dist > 0) {
+                const force = (160 - dist) / 160;
+                this.x -= (dx / dist) * force * 3;
+                this.y -= (dy / dist) * force * 3;
+            }
+        }
+
+        // Wrap edges
+        if (this.x < -10) this.x = width + 10;
+        if (this.x > width + 10) this.x = -10;
+        if (this.y < -10) this.y = height + 10;
+        if (this.y > height + 10) this.y = -10;
+    }
+
+    draw() {
+        const { ctx } = this.scene;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${this.hue}, 90%, 65%, ${Math.max(0.05, this.alpha)})`;
+        ctx.shadowBlur = this.isDataPacket ? 12 : 4;
+        ctx.shadowColor = `hsla(${this.hue}, 90%, 60%, 0.8)`;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+    }
+}
+
 const CurtainIntro = ({ isLifted, onLift, onNavigateSection }) => {
     const canvasRef = useRef(null);
     const containerRef = useRef(null);
@@ -62,11 +123,14 @@ const CurtainIntro = ({ isLifted, onLift, onNavigateSection }) => {
 
         let width = (canvas.width = window.innerWidth);
         let height = (canvas.height = window.innerHeight);
+        const scene = { ctx, width, height, mouse: mousePos };
 
         const handleResize = () => {
             if (!canvas) return;
             width = canvas.width = window.innerWidth;
             height = canvas.height = window.innerHeight;
+            scene.width = width;
+            scene.height = height;
             initParticles();
         };
 
@@ -75,62 +139,6 @@ const CurtainIntro = ({ isLifted, onLift, onNavigateSection }) => {
         // Internet packet & resume node simulation
         let particles = [];
         const PARTICLE_COUNT = Math.min(65, Math.floor((width * height) / 22000));
-
-        class PacketParticle {
-            constructor() {
-                this.reset();
-            }
-
-            reset() {
-                this.x = Math.random() * width;
-                this.y = Math.random() * height;
-                this.vx = (Math.random() - 0.5) * 0.7;
-                this.vy = (Math.random() - 0.5) * 0.7;
-                this.size = Math.random() * 2.2 + 1;
-                this.baseAlpha = Math.random() * 0.45 + 0.2;
-                this.alpha = this.baseAlpha;
-                this.hue = Math.random() > 0.6 ? 220 : Math.random() > 0.3 ? 260 : 190; // Cosmic blue, cyan, violet
-                this.pulseSpeed = Math.random() * 0.02 + 0.01;
-                this.pulseAngle = Math.random() * Math.PI * 2;
-                this.isDataPacket = Math.random() > 0.7;
-            }
-
-            update() {
-                this.x += this.vx;
-                this.y += this.vy;
-
-                this.pulseAngle += this.pulseSpeed;
-                this.alpha = this.baseAlpha + Math.sin(this.pulseAngle) * 0.2;
-
-                // Mouse magnetic repulsion / interaction
-                if (mousePos.current.active) {
-                    const dx = mousePos.current.x - this.x;
-                    const dy = mousePos.current.y - this.y;
-                    const dist = Math.sqrt(dx * dx + dy * dy);
-                    if (dist < 160 && dist > 0) {
-                        const force = (160 - dist) / 160;
-                        this.x -= (dx / dist) * force * 3;
-                        this.y -= (dy / dist) * force * 3;
-                    }
-                }
-
-                // Wrap edges
-                if (this.x < -10) this.x = width + 10;
-                if (this.x > width + 10) this.x = -10;
-                if (this.y < -10) this.y = height + 10;
-                if (this.y > height + 10) this.y = -10;
-            }
-
-            draw() {
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-                ctx.fillStyle = `hsla(${this.hue}, 90%, 65%, ${Math.max(0.05, this.alpha)})`;
-                ctx.shadowBlur = this.isDataPacket ? 12 : 4;
-                ctx.shadowColor = `hsla(${this.hue}, 90%, 60%, 0.8)`;
-                ctx.fill();
-                ctx.shadowBlur = 0;
-            }
-        }
 
         // Cyber data wave packets traveling along curved grid streams
         const dataRays = Array.from({ length: 5 }, (_, i) => ({
@@ -143,7 +151,7 @@ const CurtainIntro = ({ isLifted, onLift, onNavigateSection }) => {
         const initParticles = () => {
             particles = [];
             for (let i = 0; i < PARTICLE_COUNT; i++) {
-                particles.push(new PacketParticle());
+                particles.push(new PacketParticle(scene));
             }
         };
 

@@ -61,6 +61,9 @@ def _resolve_database_url(url: str | None) -> str:
 
 class Settings:
     def __init__(self) -> None:
+        # "production" turns off the API docs and demo login (unless explicitly enabled), sends
+        # HSTS, and refuses to start with unsafe settings. The Docker image sets it.
+        self.environment: str = (os.getenv("APP_ENV") or "development").strip().lower()
         self.database_url: str = _resolve_database_url(os.getenv("DATABASE_URL"))
         self.secret_key: str | None = os.getenv("SECRET_KEY") or None
         self.access_token_expire_minutes: int = _env_int("ACCESS_TOKEN_EXPIRE_MINUTES", 60 * 24)
@@ -77,16 +80,42 @@ class Settings:
         self.cors_origins: list[str] = (
             [o.strip() for o in origins.split(",") if o.strip()] if origins else list(DEFAULT_CORS_ORIGINS)
         )
-        self.demo_login_enabled: bool = _env_bool("DEMO_LOGIN_ENABLED", True)
+        self.demo_login_enabled: bool = _env_bool("DEMO_LOGIN_ENABLED", not self.is_production)
+        self.docs_enabled: bool = _env_bool("ENABLE_API_DOCS", not self.is_production)
+        self.rate_limits_enabled: bool = _env_bool("RATE_LIMITS_ENABLED", True)
         self.max_resume_bytes: int = _env_int("MAX_RESUME_MB", 10) * 1024 * 1024
         # Video interviews upload each answer's audio (16 kHz WAV is about 2 MB a minute).
         self.max_answer_audio_bytes: int = _env_int("MAX_ANSWER_AUDIO_MB", 16) * 1024 * 1024
+        # Any request body above this is refused before it is read: the largest upload plus
+        # room for a whiteboard image (4 MB) and form fields.
+        self.max_request_bytes: int = max(self.max_resume_bytes, self.max_answer_audio_bytes) + 6 * 1024 * 1024
         self.static_dir: Path = Path(os.getenv("STATIC_DIR") or (BACKEND_DIR / "static"))
         self.run_migrations_on_startup: bool = _env_bool("RUN_MIGRATIONS_ON_STARTUP", True)
 
     @property
+    def is_production(self) -> bool:
+        return self.environment == "production"
+
+    @property
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
+
+    def problems(self) -> list[str]:
+        """Settings that make the app unsafe to run. Startup fails if any are found."""
+        found = []
+        if self.environment not in ("development", "production"):
+            found.append(f'APP_ENV must be "development" or "production", not "{self.environment}".')
+        if not self.secret_key:
+            found.append("SECRET_KEY is not set. Generate one with: "
+                         "python -c \"import secrets; print(secrets.token_urlsafe(48))\"")
+        elif self.is_production and len(self.secret_key) < 32:
+            found.append("SECRET_KEY must be at least 32 characters in production.")
+        if any(origin.strip() == "*" for origin in self.cors_origins):
+            found.append("CORS_ORIGINS cannot be \"*\". List the exact frontend origins, separated by commas.")
+        if self.is_production and any(o.startswith("http://") and "localhost" not in o and "127.0.0.1" not in o
+                                      for o in self.cors_origins):
+            found.append("CORS_ORIGINS must use https:// in production (except localhost).")
+        return found
 
 
 settings = Settings()

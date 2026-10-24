@@ -1,7 +1,23 @@
-# --- PREPSPHERE MASTER GITIGNORE ---
+# ---------------------------------------------------------------------------
+# Secrets: never commit real keys. Only the .env.example templates are tracked.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
 
+# ---------------------------------------------------------------------------
+# Local data: databases hold users' emails, password hashes and resume text.
+# ---------------------------------------------------------------------------
+*.db
+*.db-journal
+*.sqlite3
+*.db.backup-*
+
+# ---------------------------------------------------------------------------
 # Python
+# ---------------------------------------------------------------------------
 backend/venv/
+.venv/
 __pycache__/
 *.py[cod]
 *$py.class
@@ -10,28 +26,11 @@ __pycache__/
 .coverage
 htmlcov/
 .mypy_cache/
+.ruff_cache/
 
-# Secrets
-.env
-.env.*
-!.env.example
-
-# Local databases (contain users' emails, password hashes and resume text) and migration backups
-*.db
-*.db-journal
-*.sqlite3
-*.db.backup-*
-backend/data/*.json.bak
-
-# AI Support (Large Files)
-backend/interview_ai_model/
-wandb/
-outputs/
-checkpoint-*/
-other_list.txt
-stats_summary.txt
-
+# ---------------------------------------------------------------------------
 # Node / React
+# ---------------------------------------------------------------------------
 node_modules/
 dist/
 npm-debug.log*
@@ -39,21 +38,26 @@ yarn-debug.log*
 yarn-error.log*
 .eslintcache
 
-# OS / IDE
+# ---------------------------------------------------------------------------
+# Editors and operating systems
+# ---------------------------------------------------------------------------
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
 *.log
 
-# Generated reports / presentations / documents (personal use, not published)
+# ---------------------------------------------------------------------------
+# Personal files kept next to the project but never published:
+# reports, presentations, milestone documents and the scripts that make them.
+# ---------------------------------------------------------------------------
+personal/
 *.pdf
 *.pptx
 *.ppt
 *.docx
 *.doc
-PrepAI_*.html
-PrepAI_Platform_Report.html
+PrepAI_*
 SiddhiAI_*
 FEATURES.md
 
