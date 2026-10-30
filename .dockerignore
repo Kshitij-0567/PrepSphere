@@ -1,0 +1,21 @@
+# Keeps secrets, local data and anything the image does not need out of the build context.
+.git
+.github
+docs
+personal
+**/.env
+**/.env.*
+!**/.env.example
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+backend/venv
+backend/*.db
+backend/*.db.backup-*
+backend/tests
+**/*.pdf
+**/*.pptx
+**/*.docx
+**/*.md
