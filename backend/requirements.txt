@@ -1,7 +1,7 @@
 fastapi==0.150.0
 uvicorn==0.54.0
 sqlalchemy==2.0.53
-alembic==1.20.0
+alembic==1.20.1
 google-genai==2.31.0
 google-auth==2.62.0
 httpx==0.28.1
