@@ -15,7 +15,7 @@
     "@codemirror/lang-javascript": "^6.2.5",
     "@codemirror/lang-python": "^6.2.1",
     "@codemirror/language": "^6.12.4",
-    "@codemirror/legacy-modes": "^6.5.4",
+    "@codemirror/legacy-modes": "^6.5.5",
     "@excalidraw/excalidraw": "^0.18.1",
     "@lezer/highlight": "^1.2.4",
     "@mediapipe/tasks-vision": "^1.0.1",
