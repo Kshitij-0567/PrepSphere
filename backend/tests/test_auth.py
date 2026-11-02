@@ -91,18 +91,6 @@ def test_google_login_checks_audience_and_verified_email(client, monkeypatch):
     assert login.status_code == 400
 
 
-def test_demo_login_creates_isolated_accounts(client):
-    first = client.post("/auth/demo").json()
-    second = client.post("/auth/demo").json()
-    assert first["user_email"] != second["user_email"]
-    assert client.get("/users/me", headers={"Authorization": f"Bearer {first['access_token']}"}).status_code == 200
-
-
-def test_demo_login_can_be_disabled(client, monkeypatch):
-    monkeypatch.setattr(settings, "demo_login_enabled", False)
-    assert client.post("/auth/demo").status_code == 404
-
-
 @pytest.mark.parametrize("path", ["/resumes", "/skill-gaps?role_id=1", "/interviews/history", "/recommendations"])
 def test_protected_endpoints_require_auth(client, path):
     assert client.get(path).status_code == 401

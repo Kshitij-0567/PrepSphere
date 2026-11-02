@@ -161,18 +161,6 @@ def test_benchmarks_compare_with_the_cohort(client, signup, sde):
     assert client.get("/benchmarks", headers=me, params={"country": "ZZ"}).status_code == 400
 
 
-def test_demo_accounts_are_left_out(client, user_headers, sde):
-    before = client.get("/benchmarks", headers=user_headers, params={"role_id": sde["id"]}).json()["cohort_size"]
-    demo = {"Authorization": f"Bearer {client.post('/auth/demo').json()['access_token']}"}
-    upload_text_resume(client, demo, STRONG_RESUME)
-    client.post("/interviews", headers=demo, json={"role_id": sde["id"]})
-    after = client.get("/benchmarks", headers=user_headers, params={"role_id": sde["id"]}).json()["cohort_size"]
-    assert after == before
-
-    assert client.get("/showcase/me", headers=demo).json()["blocked_reason"] == "demo"
-    assert client.put("/showcase", headers=demo, json={"role_id": sde["id"], "confirm": True}).status_code == 403
-
-
 # --- showcase ---
 
 def test_publish_requires_a_resume_and_confirmation(client, user_headers, sde):

@@ -19,7 +19,6 @@ os.environ["DATABASE_URL"] = f"sqlite:///{(_TMP_DIR / 'test.db').as_posix()}"
 os.environ["SECRET_KEY"] = "test-secret-key-that-is-long-enough-for-hs256-signing"
 os.environ["GEMINI_API_KEY"] = ""
 os.environ["GOOGLE_CLIENT_ID"] = ""
-os.environ["DEMO_LOGIN_ENABLED"] = "true"
 os.environ["APP_ENV"] = "development"
 # The suite creates hundreds of accounts from one address; test_security.py turns limits on.
 os.environ["RATE_LIMITS_ENABLED"] = "false"

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { Mail, Lock, ArrowRight, Brain, Zap } from 'lucide-react';
+import { Mail, Lock, ArrowRight, Brain } from 'lucide-react';
 import { GoogleLogin } from '@react-oauth/google';
 import api, { apiErrorMessage } from '../api/client';
 import { saveSession } from '../api/session';
@@ -32,19 +32,6 @@ const Login = () => {
             completeSignIn(res.data);
         } catch (err) {
             setErrorMsg(apiErrorMessage(err, "Invalid email or password"));
-        }
-        setLoading(false);
-    };
-
-    // Each demo session gets its own throwaway account, so visitors never see each other's resumes.
-    const handleDemoLogin = async () => {
-        setErrorMsg('');
-        setLoading(true);
-        try {
-            const res = await api.post('/auth/demo');
-            completeSignIn(res.data);
-        } catch (err) {
-            setErrorMsg(apiErrorMessage(err, "Could not launch demo session"));
         }
         setLoading(false);
     };
@@ -147,28 +134,6 @@ const Login = () => {
                         {loading ? "Signing in..." : "Sign In"} <ArrowRight size={18} />
                     </button>
 
-                    <button
-                        type="button"
-                        onClick={handleDemoLogin}
-                        disabled={loading}
-                        style={{
-                            width: '100%',
-                            padding: '12px',
-                            background: 'rgba(16, 185, 129, 0.12)',
-                            color: '#34d399',
-                            border: '1px solid rgba(16, 185, 129, 0.3)',
-                            borderRadius: '12px',
-                            fontWeight: '600',
-                            fontSize: '0.9rem',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '8px'
-                        }}
-                    >
-                        <Zap size={16} /> Try a Private Demo Session
-                    </button>
                 </form>
 
                 {GOOGLE_CLIENT_ID && (

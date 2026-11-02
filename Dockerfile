@@ -35,4 +35,5 @@ VOLUME ["/data"]
 
 EXPOSE 8000
 # Behind a reverse proxy, set FORWARDED_ALLOW_IPS to its address so rate limits see real client IPs.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-server-header"]
+# Shell form on purpose: hosts such as Render and Railway assign the port through $PORT.
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --no-server-header

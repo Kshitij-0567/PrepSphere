@@ -99,19 +99,19 @@ def test_page_loads_get_the_app_and_fetches_get_the_api(tmp_path):
 # --- configuration ---
 
 def _settings(monkeypatch, **env):
-    for name in ("APP_ENV", "DEMO_LOGIN_ENABLED", "ENABLE_API_DOCS", "CORS_ORIGINS", "SECRET_KEY"):
+    for name in ("APP_ENV", "ENABLE_API_DOCS", "CORS_ORIGINS", "SECRET_KEY"):
         monkeypatch.delenv(name, raising=False)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
     return config.Settings()
 
 
-def test_production_turns_off_docs_and_demo_by_default(monkeypatch):
+def test_production_turns_off_docs_by_default(monkeypatch):
     prod = _settings(monkeypatch, APP_ENV="production", SECRET_KEY="x" * 48)
-    assert prod.is_production and not prod.docs_enabled and not prod.demo_login_enabled
+    assert prod.is_production and not prod.docs_enabled
     assert prod.problems() == []
     dev = _settings(monkeypatch, SECRET_KEY="x" * 48)
-    assert dev.docs_enabled and dev.demo_login_enabled
+    assert dev.docs_enabled
 
 
 def test_unsafe_configuration_is_reported(monkeypatch):

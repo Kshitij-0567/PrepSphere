@@ -51,6 +51,10 @@ def _resolve_database_url(url: str | None) -> str:
     database file no matter which directory it is started from."""
     if not url:
         return f"sqlite:///{(BACKEND_DIR / 'interview_prep.db').as_posix()}"
+    # Render, Heroku and several other hosts hand out "postgres://" URLs, a scheme
+    # SQLAlchemy 2 no longer recognises. Rewrite it to the dialect name it expects.
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
     prefix = "sqlite:///"
     if url.startswith(prefix) and url != "sqlite:///:memory:":
         raw_path = url[len(prefix):]
@@ -61,8 +65,8 @@ def _resolve_database_url(url: str | None) -> str:
 
 class Settings:
     def __init__(self) -> None:
-        # "production" turns off the API docs and demo login (unless explicitly enabled), sends
-        # HSTS, and refuses to start with unsafe settings. The Docker image sets it.
+        # "production" turns off the API docs (unless explicitly enabled), sends HSTS, and
+        # refuses to start with unsafe settings. The Docker image sets it.
         self.environment: str = (os.getenv("APP_ENV") or "development").strip().lower()
         self.database_url: str = _resolve_database_url(os.getenv("DATABASE_URL"))
         self.secret_key: str | None = os.getenv("SECRET_KEY") or None
@@ -80,7 +84,6 @@ class Settings:
         self.cors_origins: list[str] = (
             [o.strip() for o in origins.split(",") if o.strip()] if origins else list(DEFAULT_CORS_ORIGINS)
         )
-        self.demo_login_enabled: bool = _env_bool("DEMO_LOGIN_ENABLED", not self.is_production)
         self.docs_enabled: bool = _env_bool("ENABLE_API_DOCS", not self.is_production)
         self.rate_limits_enabled: bool = _env_bool("RATE_LIMITS_ENABLED", True)
         self.max_resume_bytes: int = _env_int("MAX_RESUME_MB", 10) * 1024 * 1024

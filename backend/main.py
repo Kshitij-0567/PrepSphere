@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from auth import auth_utils
 from core import database, models, schemas, security, seed_data
-from core.config import DEMO_EMAIL_DOMAIN, QUESTIONS_PER_INTERVIEW, settings
+from core.config import QUESTIONS_PER_INTERVIEW, settings
 from core.countries import COUNTRIES, country_payload, normalize_country
 from core.frontend import PageLoadMiddleware
 from core.migrations import run_migrations
@@ -320,21 +320,6 @@ async def google_login(data: schemas.GoogleLoginRequest, db: Session = Depends(d
         db.add(user)
         db.commit()
         db.refresh(user)
-    return _token_response(user)
-
-@app.post("/auth/demo", response_model=schemas.Token, dependencies=[security.per_ip("demo", 10, 600)])
-async def demo_login(db: Session = Depends(database.get_db)):
-    """Creates a fresh, private demo account so demo visitors never see each other's data."""
-    if not settings.demo_login_enabled:
-        raise HTTPException(status_code=404, detail="Demo login is disabled")
-    user = models.User(
-        name="Demo Candidate",
-        email=f"demo-{secrets.token_hex(8)}@{DEMO_EMAIL_DOMAIN}",
-        password_hash=None,
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
     return _token_response(user)
 
 @app.get("/users/me", response_model=schemas.UserProfile)
