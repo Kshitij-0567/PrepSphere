@@ -1006,3 +1006,22 @@
     transform: translateX(0);
   }
 }
+/* Small legal footer: links the privacy policy from the home page, as Google requires
+   before an app using Google Sign-In can be published. */
+.site-legal-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 20px;
+  padding: 32px 20px 40px;
+  color: #64748b;
+  font-size: 0.85rem;
+}
+
+.site-legal-footer a {
+  color: #94a3b8;
+  text-decoration: none;
+}
+
+.site-legal-footer a:hover,
+.site-legal-footer a:focus-visible { color: #f8fafc; }

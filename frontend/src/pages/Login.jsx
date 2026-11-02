@@ -158,6 +158,9 @@ const Login = () => {
                 <div className="auth-footer">
                     Don't have an account? <Link to="/signup">Create account</Link>
                 </div>
+                <div className="auth-legal">
+                    <Link to="/privacy">Privacy policy</Link>
+                </div>
             </motion.div>
         </div>
     );

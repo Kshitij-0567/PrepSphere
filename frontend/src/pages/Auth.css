@@ -133,3 +133,18 @@
     justify-content: center;
     width: 100%;
 }
+.auth-legal {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.auth-legal a {
+  color: #94a3b8;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.auth-legal a:hover { color: #f8fafc; }

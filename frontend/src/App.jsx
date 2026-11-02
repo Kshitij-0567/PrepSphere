@@ -21,6 +21,7 @@ const BenchmarksPage = lazy(() => import('./pages/showcase/BenchmarksPage'));
 const ShowcasePage = lazy(() => import('./pages/showcase/ShowcasePage'));
 const PublishShowcasePage = lazy(() => import('./pages/showcase/PublishShowcasePage'));
 const ShowcaseDetailPage = lazy(() => import('./pages/showcase/ShowcaseDetailPage'));
+const PrivacyPage = lazy(() => import('./pages/PrivacyPage'));
 
 const PageLoader = () => (
   <div role="status" aria-label="Loading" style={{ minHeight: '60vh', display: 'grid', placeItems: 'center', color: '#6f7b98', fontSize: 14 }}>
@@ -47,6 +48,7 @@ function App() {
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        <Route path="/privacy" element={<PrivacyPage />} />
         {/* The video interview room is full screen, outside the sidebar layout */}
         <Route path="/interviews/:id/live" element={<PrivateRoute><VideoInterviewPage /></PrivateRoute>} />
         {/* Signed-in pages share the sidebar layout */}

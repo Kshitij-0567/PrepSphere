@@ -177,6 +177,10 @@ const Signup = () => {
                 <div className="auth-footer">
                     Already have an account? <Link to="/login">Sign in here</Link>
                 </div>
+                <div className="auth-legal">
+                    By creating an account you agree to how we handle your data in our{' '}
+                    <Link to="/privacy">privacy policy</Link>.
+                </div>
             </motion.div>
         </div>
     );

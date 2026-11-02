@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
     Brain, ArrowRight, CheckCircle2, ShieldCheck, Zap, 
@@ -635,6 +635,11 @@ const LandingPage = () => {
                         </button>
                     </div>
                 </section>
+
+                <footer className="site-legal-footer">
+                    <span>© 2026 PrepSphere</span>
+                    <Link to="/privacy">Privacy policy</Link>
+                </footer>
 
             </div>
         </div>
